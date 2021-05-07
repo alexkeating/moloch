@@ -59,10 +59,11 @@ impl Moloch {
     #[init]
     pub fn new(
         summoner: AccountId,
-        approved_tokens: Vec<AccountId>,
+        approved_token: AccountId,
         period_duration: u128,
         voting_period_length: u128,
         grace_period_length: u128,
+        abort_window: u128,
         proposal_deposit: u128,
         dilution_bound: u128,
         processing_reward: u128,
@@ -77,6 +78,11 @@ impl Moloch {
             env::is_valid_account_id(summoner.as_bytes()),
             "Summoner must be a valid account"
         );
+        assert!(
+            env::is_valid_account_id(approved_token.as_bytes()),
+            "Approved token must have a valid address"
+        );
+
         assert!(
             period_duration > 0,
             "period_duration must be greater than 0"
@@ -97,14 +103,6 @@ impl Moloch {
         assert!(
             dilution_bound <= MAX_DILUTION_BOUND,
             "dilution_bound exceeds max dilution bound"
-        );
-        assert!(
-            approved_tokens.len() > 0,
-            "There needs to be at least one approved token"
-        );
-        assert!(
-            approved_tokens.len() <= MAX_TOKEN_WHITELIST_COUNT,
-            "Too many whitelisted tokens"
         );
         assert!(
             proposal_deposit >= processing_reward,
@@ -166,44 +164,17 @@ impl Moloch {
     pub fn submit_proposal(
         &self,
         applicant: AccountId,
+        token_tribute: u128,
         shares_requested: u128,
-        loot_requested: u128,
-        tribute_offered: u128,
-        tribute_token: TokenId,
-        payment_requested: u128,
-        payment_token: TokenId,
         details: String,
-    ) -> u128 {
-        0
+    ) {
     }
-    pub fn submit_whitelist_proposal(
-        &self,
-        token_to_whitelist: AccountId,
-        details: String,
-    ) -> u128 {
-        0
-    }
-    pub fn submit_guild_kick_proposal(&self, member_to_kick: AccountId, details: String) -> u128 {
-        0
-    }
-    pub fn submit_vote(&self, proposal_index: u128, uint_vote: u8) {}
-    pub fn sponsor_proposal(&self, proposal_id: u128) {}
+
+    pub fn submit_vote(&self, proposal_index: u128, uintVote: u8) {}
     pub fn process_proposal(&self, proposal_index: u128) {}
-    pub fn process_whitelist_proposal(&self, proposal_index: u128) {}
-    pub fn process_guild_kick_proposal(&self, proposal_index: u128) {}
-    pub fn rage_quit(&self, shares_to_burn: u128, loot_to_burn: u128) {}
-    pub fn rage_kick(&self, acount_id: AccountId) {}
-    pub fn withdraw_balance(&self, token: TokenId, amount: u128) {}
-    pub fn withdraw_balances(&self, tokens: Vec<AccountId>, amounts: Vec<u128>, max: bool) {}
-    pub fn collect_tokens(&self, token: TokenId) {}
-    pub fn cancel_proposal(&self, proposal_id: u128) {}
+    pub fn rage_quit(&self, shares_to_burn: u128) {}
+    pub fn abort(&self, proposal_index: u128) {}
     pub fn update_delegate_key(&self, new_delegate: AccountId) {}
-    pub fn can_rage_quit(&self, highest_index_yes_vote: u128) -> bool {
-        false
-    }
-    pub fn has_voting_period_expired(&self, starting_period: u128) -> bool {
-        false
-    }
 
     // Getter functions
     pub fn get_current_period(&self) -> u128 {
@@ -214,11 +185,12 @@ impl Moloch {
         0
     }
 
-    pub fn get_proposal_flags(&self, proposal_id: u128) -> bool {
+    pub fn can_rage_quit(&self, highest_index_yes_vote: u128) -> bool {
         false
     }
-    pub fn get_user_token_balance(&self, user: AccountId, token: AccountId) -> u128 {
-        0
+
+    pub fn has_voting_period_expired(&self, starting_period: u128) -> bool {
+        false
     }
 
     pub fn get_member_proposal_vote(
@@ -228,9 +200,11 @@ impl Moloch {
     ) -> Vote {
         Vote::No
     }
-    pub fn get_token_count(&self) -> u128 {
-        return 0;
-    }
+
+    // Setup reentrancy guard
+    // and owner ship
+    //
+    // Reentrancy is basically a lock on stateful actions
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -256,30 +230,13 @@ mod tests {
         "fdai.testnet".to_string()
     }
     #[test]
-    fn submit_whitelist_proposal() {
+    fn submit_proposal() {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        let proposal = contract.submit_whitelist_proposal("".to_string(), "".to_string());
-        assert_eq!(proposal, 0)
+        contract.submit_proposal("".to_string(), 0, 0, "".to_string());
     }
 
-    #[test]
-    fn submit_guild_kick_proposal() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        let proposal = contract.submit_guild_kick_proposal("".to_string(), "".to_string());
-        assert_eq!(proposal, 0)
-    }
-
-    #[test]
-    fn sponsor_proposal() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        contract.sponsor_proposal(0);
-    }
     #[test]
     fn submit_vote() {
         let context = get_context(false);
@@ -297,67 +254,19 @@ mod tests {
     }
 
     #[test]
-    fn process_whitelist_proposal() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        contract.process_whitelist_proposal(0);
-    }
-
-    #[test]
-    fn process_guild_kick_proposal() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        contract.process_guild_kick_proposal(0);
-    }
-
-    #[test]
     fn rage_quit() {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        contract.rage_quit(0, 0);
+        contract.rage_quit(0);
     }
 
     #[test]
-    fn rage_kick() {
+    fn abort() {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        contract.rage_kick("".to_string());
-    }
-
-    #[test]
-    fn withdraw_balance() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        contract.withdraw_balance(0, 0);
-    }
-
-    #[test]
-    fn withdraw_balances() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        contract.withdraw_balances(vec!["".to_string()], vec![0], false);
-    }
-
-    #[test]
-    fn collect_tokens() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        contract.collect_tokens(0);
-    }
-
-    #[test]
-    fn cancel_proposal() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        contract.cancel_proposal(0);
+        contract.abort(0);
     }
 
     #[test]
@@ -367,25 +276,8 @@ mod tests {
         let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
         contract.update_delegate_key("".to_string());
     }
-    #[test]
-    fn can_rage_quit() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        let can = contract.can_rage_quit(0);
-        assert_eq!(can, false)
-    }
 
-    #[test]
-    fn has_voting_period_expired() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        let expired = contract.has_voting_period_expired(0);
-        assert_eq!(expired, false)
-    }
-
-    // Getter Funcitons
+    // Getter
     #[test]
     fn get_current_period() {
         let context = get_context(false);
@@ -405,21 +297,21 @@ mod tests {
     }
 
     #[test]
-    fn get_proposal_flags() {
+    fn can_rage_quit() {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        let flags = contract.get_proposal_flags(0);
-        assert_eq!(flags, false)
+        let can = contract.can_rage_quit(0);
+        assert_eq!(can, false)
     }
 
     #[test]
-    fn get_user_token_balance() {
+    fn has_voting_period_expired() {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        let balance = contract.get_user_token_balance("".to_string(), "".to_string());
-        assert_eq!(balance, 0)
+        let expired = contract.has_voting_period_expired(0);
+        assert_eq!(expired, false)
     }
 
     #[test]
@@ -429,14 +321,5 @@ mod tests {
         let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
         let vote = contract.get_member_proposal_vote("".to_string(), 0);
         assert_eq!(vote, Vote::No)
-    }
-
-    #[test]
-    fn get_token_count() {
-        let context = get_context(false);
-        testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
-        let count = contract.get_token_count();
-        assert_eq!(count, 0)
     }
 }
