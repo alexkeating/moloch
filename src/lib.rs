@@ -6,6 +6,9 @@ use chrono::Utc;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::UnorderedMap;
 use near_sdk::{env, near_bindgen, setup_alloc, AccountId, PanicOnDefault};
+
+mod guild_bank;
+
 // Implement Moloch Contract
 
 const MAX_VOTING_PERIOD_LENGTH: u128 = 10000000000000000000; // maximum length of voting period;
@@ -21,12 +24,13 @@ pub struct Moloch {
     voting_period_length: u128,
     grace_period_length: u128,
     proposal_deposit: u128,
+    abort_window: u128,
     dilution_bound: u128,
     processing_reward: u128,
     sumononing_time: i64,
-    token_whitelist: UnorderedMap<AccountId, bool>,
-    deposit_token: AccountId,
+    token_id: AccountId,
     members: UnorderedMap<AccountId, Member>,
+    total_shares: u128,
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
@@ -99,6 +103,11 @@ impl Moloch {
             grace_period_length <= MAX_GRACE_PERIOD_LENGTH,
             "grace_period exceeds max grace period"
         );
+        assert!(abort_window > 0, "Abort window cannot be 0");
+        assert!(
+            abort_window <= voting_period_length,
+            "abort_window must be smaller than the voting_period_length"
+        );
         assert!(dilution_bound > 0, "dilution_bound cannot be 0");
         assert!(
             dilution_bound <= MAX_DILUTION_BOUND,
@@ -109,30 +118,8 @@ impl Moloch {
             "proposal_deposit cannot be smaller than processing reward"
         );
 
-        // set deposit token
+        // create guild bank
 
-        // Declare token whitelist mapping
-        let mut token_whitelist = UnorderedMap::new(b"token-whitelist".to_vec());
-        // Loop over approved tokens
-        // for token in &approved_tokens {
-        //     assert!(
-        //         env::is_valid_account_id(token.as_bytes()),
-        //         "Token account must be valid"
-        //     );
-        //     println!("{:?}", token_whitelist.get(token));
-        //     assert!(
-        //         token_whitelist.get(&token) == None,
-        //         "Duplicate approved token"
-        //     );
-        //     token_whitelist.insert(&token, &true);
-        // }
-
-        // Set deposit token
-        // TODO: Is this the best way taking the first from an array
-        // let deposit_token = approved_tokens.get(0).unwrap();
-
-        // Add summoning time
-        // Add Member to map
         // TODO: Add Delegate key map, going to omit now because it does not seem necessary
         // Moloch settings
         let mut members = UnorderedMap::new(b"members".to_vec());
@@ -148,17 +135,20 @@ impl Moloch {
             },
         );
 
+        //
+
         Self {
             period_duration: period_duration,
             voting_period_length: voting_period_length,
             grace_period_length: grace_period_length,
             proposal_deposit: proposal_deposit,
+            abort_window: abort_window,
             dilution_bound: dilution_bound,
             processing_reward: processing_reward,
-            token_whitelist: token_whitelist,
+            token_id: approved_token,
             sumononing_time: Utc::now().timestamp(),
-            deposit_token: approved_token,
             members: members,
+            total_shares: 1,
         }
     }
     pub fn submit_proposal(
