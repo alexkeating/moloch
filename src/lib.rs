@@ -114,22 +114,22 @@ impl Moloch {
         // Declare token whitelist mapping
         let mut token_whitelist = UnorderedMap::new(b"token-whitelist".to_vec());
         // Loop over approved tokens
-        for token in &approved_tokens {
-            assert!(
-                env::is_valid_account_id(token.as_bytes()),
-                "Token account must be valid"
-            );
-            println!("{:?}", token_whitelist.get(token));
-            assert!(
-                token_whitelist.get(&token) == None,
-                "Duplicate approved token"
-            );
-            token_whitelist.insert(&token, &true);
-        }
+        // for token in &approved_tokens {
+        //     assert!(
+        //         env::is_valid_account_id(token.as_bytes()),
+        //         "Token account must be valid"
+        //     );
+        //     println!("{:?}", token_whitelist.get(token));
+        //     assert!(
+        //         token_whitelist.get(&token) == None,
+        //         "Duplicate approved token"
+        //     );
+        //     token_whitelist.insert(&token, &true);
+        // }
 
         // Set deposit token
         // TODO: Is this the best way taking the first from an array
-        let deposit_token = approved_tokens.get(0).unwrap();
+        // let deposit_token = approved_tokens.get(0).unwrap();
 
         // Add summoning time
         // Add Member to map
@@ -157,7 +157,7 @@ impl Moloch {
             processing_reward: processing_reward,
             token_whitelist: token_whitelist,
             sumononing_time: Utc::now().timestamp(),
-            deposit_token: deposit_token.to_string(),
+            deposit_token: approved_token,
             members: members,
         }
     }
@@ -233,7 +233,7 @@ mod tests {
     fn submit_proposal() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         contract.submit_proposal("".to_string(), 0, 0, "".to_string());
     }
 
@@ -241,7 +241,7 @@ mod tests {
     fn submit_vote() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         contract.submit_vote(0, 0);
     }
 
@@ -249,7 +249,7 @@ mod tests {
     fn process_proposal() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         contract.process_proposal(0);
     }
 
@@ -257,7 +257,7 @@ mod tests {
     fn rage_quit() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         contract.rage_quit(0);
     }
 
@@ -265,7 +265,7 @@ mod tests {
     fn abort() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         contract.abort(0);
     }
 
@@ -273,7 +273,7 @@ mod tests {
     fn update_delegate_key() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         contract.update_delegate_key("".to_string());
     }
 
@@ -282,7 +282,7 @@ mod tests {
     fn get_current_period() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         let period = contract.get_current_period();
         assert_eq!(period, 0)
     }
@@ -291,7 +291,7 @@ mod tests {
     fn get_proposal_queue_length() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         let period = contract.get_proposal_queue_length();
         assert_eq!(period, 0)
     }
@@ -300,7 +300,7 @@ mod tests {
     fn can_rage_quit() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         let can = contract.can_rage_quit(0);
         assert_eq!(can, false)
     }
@@ -309,7 +309,7 @@ mod tests {
     fn has_voting_period_expired() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         let expired = contract.has_voting_period_expired(0);
         assert_eq!(expired, false)
     }
@@ -318,7 +318,7 @@ mod tests {
     fn get_member_proposal_vote() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), vec![fdai()], 10, 10, 10, 10, 100, 10);
+        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         let vote = contract.get_member_proposal_vote("".to_string(), 0);
         assert_eq!(vote, Vote::No)
     }
