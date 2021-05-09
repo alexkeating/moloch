@@ -31,6 +31,7 @@ pub struct Moloch {
     token_id: AccountId,
     members: UnorderedMap<AccountId, Member>,
     total_shares: u128,
+    bank: guild_bank::GuildBank,
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
@@ -119,6 +120,7 @@ impl Moloch {
         );
 
         // create guild bank
+        let bank = guild_bank::GuildBank::new(approved_token.clone());
 
         // TODO: Add Delegate key map, going to omit now because it does not seem necessary
         // Moloch settings
@@ -135,7 +137,8 @@ impl Moloch {
             },
         );
 
-        //
+        // log summon
+        env::log(format!("Summon complete by {} with 1 share!", summoner).as_bytes());
 
         Self {
             period_duration: period_duration,
@@ -149,6 +152,7 @@ impl Moloch {
             sumononing_time: Utc::now().timestamp(),
             members: members,
             total_shares: 1,
+            bank: bank,
         }
     }
     pub fn submit_proposal(
