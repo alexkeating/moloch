@@ -1,11 +1,17 @@
 extern crate chrono;
+extern crate near_contract_standards;
 extern crate near_sdk;
 
 use chrono::Utc;
 
+use near_contract_standards::fungible_token::core_impl::ext_fungible_token;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::collections::UnorderedMap;
+use near_sdk::collections::{UnorderedMap, Vector};
+use near_sdk::json_types::U128;
 use near_sdk::{env, near_bindgen, setup_alloc, AccountId, PanicOnDefault};
+
+use std::cmp::max;
+use std::collections::HashMap;
 
 mod guild_bank;
 
@@ -30,8 +36,11 @@ pub struct Moloch {
     sumononing_time: i64,
     token_id: AccountId,
     members: UnorderedMap<AccountId, Member>,
+    members_by_delegate_key: UnorderedMap<AccountId, AccountId>,
     total_shares: u128,
     bank: guild_bank::GuildBank,
+    total_shares_requested: u128,
+    proposal_queue: Vector<Proposal>,
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
@@ -40,18 +49,44 @@ pub struct Member {
     shares: u128,
     loot: u128,
     exists: bool,
-    highest_index_yes_vote: u128,
+    highest_index_yes_vote: u64,
     jailed: u128,
+}
+
+#[derive(BorshDeserialize, BorshSerialize)]
+pub struct Proposal {
+    proposer: AccountId,
+    applicant: AccountId,
+    shares_requested: u128,
+    starting_period: u128,
+    yes_votes: u128,
+    no_votes: u128,
+    processed: bool,
+    didPass: bool,
+    aborted: bool,
+    token_tribute: u128,
+    details: String,
+    max_total_shares_at_yes_vote: u128,
+    votes_by_member: HashMap<AccountId, Vote>,
 }
 
 // Needs to be changed to an AccountId
 pub type TokenId = u64;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, BorshDeserialize, BorshSerialize, Copy, Clone)]
 pub enum Vote {
     Yes,
     No,
-    Null,
+}
+
+impl Vote {
+    fn from_u8(value: u8) -> Vote {
+        match value {
+            1 => Vote::Yes,
+            2 => Vote::No,
+            _ => panic!("Unknown value: {}", value),
+        }
+    }
 }
 
 // Add constructor from the NFT example
@@ -137,6 +172,9 @@ impl Moloch {
             },
         );
 
+        let mut members_by_delegate_key = UnorderedMap::new(b"members_by_delegate_key".to_vec());
+        members_by_delegate_key.insert(&summoner, &summoner);
+
         // log summon
         env::log(format!("Summon complete by {} with 1 share!", summoner).as_bytes());
 
@@ -149,22 +187,164 @@ impl Moloch {
             dilution_bound: dilution_bound,
             processing_reward: processing_reward,
             token_id: approved_token,
-            sumononing_time: Utc::now().timestamp(),
+            sumononing_time: Utc::now().timestamp_nanos(),
             members: members,
+            members_by_delegate_key: members_by_delegate_key,
             total_shares: 1,
             bank: bank,
+            total_shares_requested: 0,
+            proposal_queue: Vector::new(b"proposal_queue".to_vec()),
         }
     }
+    #[payable]
     pub fn submit_proposal(
-        &self,
+        &mut self,
         applicant: AccountId,
         token_tribute: u128,
         shares_requested: u128,
         details: String,
     ) {
+        // 0. delegate check
+        self.only_delegate();
+        // 1. A couple logic checks
+        assert!(
+            env::is_valid_account_id(applicant.as_bytes()),
+            "applicant must be a valid account id"
+        );
+        let (shares_with_request, shares_requested_overflow) =
+            self.total_shares.overflowing_add(shares_requested);
+        assert!(!shares_requested_overflow, "Too many shares were requested");
+        let (_, shares_overflow) = shares_with_request.overflowing_add(self.total_shares_requested);
+        assert!(!shares_overflow, "Too many shares were requested");
+
+        // 2. Add shares
+        self.total_shares_requested = self.total_shares_requested.saturating_add(shares_requested);
+        // 3. get delegate key
+        // only_delegate checks above
+        let member_id = self
+            .members_by_delegate_key
+            .get(&env::predecessor_account_id())
+            .unwrap();
+        let prepaid_gas = env::prepaid_gas();
+        ext_fungible_token::ft_transfer(
+            env::current_account_id(),
+            U128::from(token_tribute),
+            Some("proposal token tribute".to_string()),
+            &self.token_id,
+            0,
+            prepaid_gas / 2,
+        );
+        // TODO: The applicant should also transfer
+
+        // 4. Calculate starting periond
+        // TODO: I don't really understand this step
+
+        let mut period_based_on_queue = 0;
+        let queue_len = self.proposal_queue.len();
+        if queue_len != 0 {
+            period_based_on_queue = match self.proposal_queue.get(queue_len.saturating_sub(1)) {
+                Some(proposal) => proposal.starting_period,
+                None => 0,
+            }
+        }
+        let starting_period = max(self.get_current_period(), period_based_on_queue);
+
+        // 5. Add to queue
+        let proposal = Proposal {
+            proposer: member_id,
+            applicant: applicant,
+            shares_requested: shares_requested,
+            starting_period: starting_period,
+            yes_votes: 0,
+            no_votes: 0,
+            processed: false,
+            didPass: false,
+            aborted: false,
+            token_tribute: token_tribute,
+            details: details,
+            max_total_shares_at_yes_vote: 0,
+            votes_by_member: HashMap::new(),
+        };
+        self.proposal_queue.push(&proposal);
+        let proposal_index = self.proposal_queue.len().saturating_sub(1);
+
+        // 6. Log
+        env::log(format!("Proposal submitted! proposal_index: {}, sender: {}, member_address: {}, applicant: {}, token_tribute: {}, shares_requested: {} ", proposal_index, env::predecessor_account_id(), proposal.proposer, proposal.applicant, token_tribute, shares_requested).as_bytes());
     }
 
-    pub fn submit_vote(&self, proposal_index: u128, uintVote: u8) {}
+    pub fn submit_vote(&self, proposal_index: u64, uint_vote: u8) {
+        // 0. delegate check
+        self.only_delegate();
+        // 1. Get member
+        let member_id = self
+            .members_by_delegate_key
+            .get(&env::predecessor_account_id())
+            .unwrap();
+        let mut member = self.members.get(&member_id).unwrap();
+        // 2. Check that proposal exists and fetch
+        assert!(
+            proposal_index < self.proposal_queue.len(),
+            "proposal does not exist",
+        );
+        let mut proposal = match self.proposal_queue.get(proposal_index) {
+            Some(proposal) => proposal,
+            None => panic!("Proposal index does not exist in the proposal_queue"),
+        };
+
+        // 3. Create vote
+        assert!(
+            uint_vote < 3,
+            "uint vote must be less than 3, 1 is yes 2 is no"
+        );
+        let vote = Vote::from_u8(uint_vote);
+
+        // 4. Add some voting period checks
+        assert!(
+            self.get_current_period() >= proposal.starting_period,
+            "Voting has not begun"
+        );
+        assert!(
+            !self.has_voting_period_expired(proposal.starting_period),
+            "Proposal voting period has expired"
+        );
+
+        let already_voted = match proposal.votes_by_member.get(&member_id) {
+            Some(_) => true,
+            None => false,
+        };
+        assert!(!already_voted, "Member has already voted");
+        assert!(!proposal.aborted, "Proposal has been aborted");
+
+        // 5. Store vote
+        proposal.votes_by_member.insert(member_id, vote);
+        // 6. Add vote to count
+        match vote {
+            Vote::Yes => {
+                proposal.yes_votes = proposal.yes_votes.saturating_add(member.shares);
+                if proposal_index > member.highest_index_yes_vote {
+                    member.highest_index_yes_vote = proposal_index;
+                };
+                if self.total_shares > proposal.max_total_shares_at_yes_vote {
+                    proposal.max_total_shares_at_yes_vote = self.total_shares;
+                };
+            }
+            Vote::No => {
+                proposal.no_votes = proposal.no_votes.saturating_add(member.shares);
+            }
+        }
+        // 7. Log success
+        env::log(
+            format!(
+                "Submitted vote! proposal_index: {}, sender: {}, delegate_key: {}, uint_vote: P{}",
+                proposal_index,
+                env::predecessor_account_id(),
+                member.delegate_key,
+                uint_vote,
+            )
+            .as_bytes(),
+        )
+    }
+
     pub fn process_proposal(&self, proposal_index: u128) {}
     pub fn rage_quit(&self, shares_to_burn: u128) {}
     pub fn abort(&self, proposal_index: u128) {}
@@ -172,7 +352,11 @@ impl Moloch {
 
     // Getter functions
     pub fn get_current_period(&self) -> u128 {
-        0
+        let period_64 = Utc::now()
+            .timestamp_nanos()
+            .saturating_sub(self.sumononing_time)
+            .unsigned_abs();
+        u128::from(period_64).wrapping_div(self.period_duration)
     }
 
     pub fn get_proposal_queue_length(&self) -> u128 {
@@ -184,7 +368,8 @@ impl Moloch {
     }
 
     pub fn has_voting_period_expired(&self, starting_period: u128) -> bool {
-        false
+        return self.get_current_period()
+            >= starting_period.saturating_add(self.voting_period_length);
     }
 
     pub fn get_member_proposal_vote(
@@ -193,6 +378,18 @@ impl Moloch {
         proposal_index: u128,
     ) -> Vote {
         Vote::No
+    }
+
+    // helper function
+    fn only_delegate(&self) {
+        let delegate_key = match self
+            .members_by_delegate_key
+            .get(&env::predecessor_account_id())
+        {
+            Some(delegate_key) => delegate_key,
+            None => "".to_string(),
+        };
+        assert!(delegate_key != "".to_string(), "Account is not a delegate");
     }
 
     // Setup reentrancy guard
@@ -212,9 +409,13 @@ mod tests {
 
     fn get_context(is_view: bool) -> VMContext {
         VMContextBuilder::new()
-            .signer_account_id("bob_near".try_into().unwrap())
+            .signer_account_id(bob().try_into().unwrap())
             .is_view(is_view)
             .build()
+    }
+
+    fn bob() -> AccountId {
+        "bob.near".to_string()
     }
 
     fn robert() -> AccountId {
@@ -227,17 +428,43 @@ mod tests {
     fn submit_proposal() {
         let context = get_context(false);
         testing_env!(context);
+        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal(robert(), 10, 10, "".to_string());
+    }
+
+    // TODO: Make these error strings a constant
+    #[test]
+    #[should_panic(expected = r#"applicant must be a valid account id"#)]
+    fn submit_proposal_invalid_account() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal("".to_string(), 10, 10, "".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Account is not a delegate"#)]
+    fn submit_proposal_not_delegate() {
+        let context = get_context(false);
+        testing_env!(context);
         let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal("".to_string(), 0, 0, "".to_string());
+        contract.submit_proposal(robert(), 10, 10, "".to_string());
     }
 
     #[test]
     fn submit_vote() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_vote(0, 0);
+        let mut contract =
+            Moloch::new(bob(), fdai(), 10000000000000000000, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal(robert(), 10, 10, "".to_string());
+        contract.submit_vote(0, 1);
     }
+
+    // TODO: add these and for successful have better asserts
+    // voting has not begun
+    // voting has expired
+    // member has already voted
 
     #[test]
     fn process_proposal() {
@@ -277,8 +504,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        let period = contract.get_current_period();
-        assert_eq!(period, 0)
+        contract.get_current_period();
     }
 
     #[test]
@@ -305,7 +531,7 @@ mod tests {
         testing_env!(context);
         let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         let expired = contract.has_voting_period_expired(0);
-        assert_eq!(expired, false)
+        assert_eq!(expired, true)
     }
 
     #[test]
