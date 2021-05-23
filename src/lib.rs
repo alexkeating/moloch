@@ -43,14 +43,12 @@ pub struct Moloch {
     proposal_queue: Vector<Proposal>,
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, Default, PartialEq)]
 pub struct Member {
     delegate_key: AccountId,
     shares: u128,
-    loot: u128,
     exists: bool,
     highest_index_yes_vote: u64,
-    jailed: u128,
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
@@ -62,7 +60,7 @@ pub struct Proposal {
     yes_votes: u128,
     no_votes: u128,
     processed: bool,
-    didPass: bool,
+    did_pass: bool,
     aborted: bool,
     token_tribute: u128,
     details: String,
@@ -165,10 +163,8 @@ impl Moloch {
             &Member {
                 delegate_key: summoner.clone(),
                 shares: 1,
-                loot: 0,
                 exists: true,
                 highest_index_yes_vote: 0,
-                jailed: 0,
             },
         );
 
@@ -258,7 +254,7 @@ impl Moloch {
             yes_votes: 0,
             no_votes: 0,
             processed: false,
-            didPass: false,
+            did_pass: false,
             aborted: false,
             token_tribute: token_tribute,
             details: details,
@@ -345,8 +341,168 @@ impl Moloch {
         )
     }
 
-    pub fn process_proposal(&self, proposal_index: u128) {}
-    pub fn rage_quit(&self, shares_to_burn: u128) {}
+    pub fn process_proposal(&mut self, proposal_index: u64) {
+        assert!(
+            proposal_index < self.proposal_queue.len(),
+            "proposal does not exist",
+        );
+        let mut proposal = match self.proposal_queue.get(proposal_index) {
+            Some(proposal) => proposal,
+            None => panic!("Proposal index does not exist in the proposal_queue"),
+        };
+        // Check if current period is valid
+        assert!(
+            self.get_current_period()
+                >= proposal
+                    .starting_period
+                    .saturating_add(self.voting_period_length)
+                    .saturating_add(self.grace_period_length),
+            "Proposal is not ready to be processed"
+        );
+        assert!(
+            proposal.processed == false,
+            "Proposal has already been processed"
+        );
+        let mut previous_proposal_processed = true;
+        if proposal_index != 0 {
+            let previous_proposal = match self.proposal_queue.get(proposal_index.saturating_sub(1))
+            {
+                Some(proposal) => proposal,
+                None => panic!("Proposal index does not exist in the proposal_queue"),
+            };
+            previous_proposal_processed = previous_proposal.processed;
+        }
+
+        assert!(
+            proposal_index == 0 || previous_proposal_processed == true,
+            "Previous proposal must be processed"
+        );
+
+        // Set proposal processed to true
+        proposal.processed = true;
+
+        // Calculate total shares requested
+        // This cannot overflow because an overflow was checked upon creation of the proposal
+        let total_shares_requested = self
+            .total_shares_requested
+            .saturating_sub(proposal.shares_requested);
+
+        // Check if proposal passed
+        let mut passed = proposal.yes_votes > proposal.no_votes;
+        // Fail if dilution exceeeded
+        let max_total_shares = match self.total_shares_requested.checked_mul(self.dilution_bound) {
+            Some(shares) => shares,
+            None => u128::MAX,
+        };
+        if max_total_shares > proposal.max_total_shares_at_yes_vote {
+            passed = false
+        };
+
+        if passed == true && !proposal.aborted {
+            proposal.did_pass = true;
+            let member_exists = match self.members.get(&proposal.applicant) {
+                Some(_) => true,
+                None => false,
+            };
+            if member_exists {
+                let mut member = self.members.get(&proposal.applicant).unwrap();
+                // TODO does this need to be saved back in?
+                member.shares = member.shares.saturating_add(proposal.shares_requested);
+            } else {
+                let member_delegate_key =
+                    match self.members_by_delegate_key.get(&proposal.applicant) {
+                        Some(delegate_key) => delegate_key,
+                        None => "".to_string(),
+                    };
+                let member_exists = match self.members.get(&member_delegate_key) {
+                    Some(member) => true,
+                    None => false,
+                };
+                if member_exists {
+                    let mut member = self.members.get(&member_delegate_key).unwrap();
+                    self.members_by_delegate_key
+                        .insert(&member_delegate_key, &member_delegate_key);
+                    member.delegate_key = member_delegate_key;
+                };
+
+                // TODO: I don't really get this logic
+                self.members.insert(
+                    &proposal.applicant,
+                    &Member {
+                        delegate_key: proposal.applicant.clone(),
+                        shares: proposal.shares_requested,
+                        exists: true,
+                        highest_index_yes_vote: 0,
+                    },
+                );
+                self.members_by_delegate_key
+                    .insert(&proposal.applicant, &proposal.applicant);
+
+                let shares = self.total_shares.saturating_add(proposal.shares_requested);
+                // TODO Transfer to guild bank
+                // Send from this contract to the
+                // guild contract
+                // let prepaid_gas = env::prepaid_gas();
+                // ext_fungible_token::ft_transfer_call(
+                //     self.bank.to_string(),
+                //     U128::from(proposal.token_tribute),
+                //     None,
+                //     "proposal token tribute for passed proposal".to_string(),
+                //     &self.token_id,
+                //     0,
+                //     prepaid_gas / 2,
+                // );
+                // assert!()
+                // How to get bank id
+            }
+        }
+        // Another else path with a transfer
+        // a bunch more transfers
+
+        // Log processed proposal
+        env::log(
+            format!(
+                "Proposal Processed! proposal_index: {}, proposal_applicant: {}, proposal_proposer: {}, proposal_token_tribute: {}, proposal_shares_requested: {}, passed: {}",
+                proposal_index,
+                proposal.applicant,
+                proposal.proposer,
+                proposal.token_tribute,
+                proposal.shares_requested,
+                proposal.did_pass,
+            )
+            .as_bytes(),
+        )
+    }
+    pub fn rage_quit(&mut self, shares_to_burn: u128) {
+        // only_member modifier
+        self.only_member();
+        // Check insuffcient shares
+        let mut member = self.members.get(&env::predecessor_account_id()).unwrap();
+
+        assert!(
+            member.shares >= shares_to_burn,
+            "Not enough shares to be burned"
+        );
+        // Check can rage_quit
+        let can_rage_quit = self.can_rage_quit(member.highest_index_yes_vote);
+        assert!(
+            can_rage_quit,
+            "Can't rage quit until highest index proposal member voted YES is processed",
+        );
+        // Burn shares
+        member.shares = member.shares.saturating_sub(shares_to_burn);
+        self.total_shares = self.total_shares.saturating_sub(shares_to_burn);
+        // TODO: withdraw shares to burn
+        // log rage_quit
+        env::log(
+            format!(
+                "Rage quit! account: {}, shares_burned: {}",
+                env::predecessor_account_id(),
+                shares_to_burn,
+            )
+            .as_bytes(),
+        );
+    }
     pub fn abort(&self, proposal_index: u128) {}
     pub fn update_delegate_key(&self, new_delegate: AccountId) {}
 
@@ -363,8 +519,15 @@ impl Moloch {
         0
     }
 
-    pub fn can_rage_quit(&self, highest_index_yes_vote: u128) -> bool {
-        false
+    pub fn can_rage_quit(&self, highest_index_yes_vote: u64) -> bool {
+        assert!(
+            highest_index_yes_vote < self.proposal_queue.len(),
+            "Proposal does not exist"
+        );
+        return match self.proposal_queue.get(highest_index_yes_vote) {
+            Some(_) => true,
+            None => false,
+        };
     }
 
     pub fn has_voting_period_expired(&self, starting_period: u128) -> bool {
@@ -392,10 +555,13 @@ impl Moloch {
         assert!(delegate_key != "".to_string(), "Account is not a delegate");
     }
 
-    // Setup reentrancy guard
-    // and owner ship
-    //
-    // Reentrancy is basically a lock on stateful actions
+    fn only_member(&self) {
+        let member = match self.members.get(&env::predecessor_account_id()) {
+            Some(member) => member,
+            None => Member::default(),
+        };
+        assert!(member != Member::default(), "Account is not a member");
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -421,6 +587,10 @@ mod tests {
     fn robert() -> AccountId {
         "robert.testnet".to_string()
     }
+    fn sarah() -> AccountId {
+        "sarah.testnet".to_string()
+    }
+
     fn fdai() -> AccountId {
         "fdai.testnet".to_string()
     }
@@ -470,7 +640,28 @@ mod tests {
     fn process_proposal() {
         let context = get_context(false);
         testing_env!(context);
+        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal(robert(), 10, 10, "".to_string());
+        contract.process_proposal(0);
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Account is not a delegate"#)]
+    fn process_proposal_not_delegate() {
+        let context = get_context(false);
+        testing_env!(context);
         let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal(robert(), 10, 10, "".to_string());
+        contract.process_proposal(0);
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Proposal is not ready to be processed"#)]
+    fn process_proposal_not_ready_to_be_processed() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = Moloch::new(bob(), fdai(), 1000000000000000000, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal(robert(), 10, 10, "".to_string());
         contract.process_proposal(0);
     }
 
@@ -478,7 +669,8 @@ mod tests {
     fn rage_quit() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal(robert(), 10, 10, "".to_string());
         contract.rage_quit(0);
     }
 
@@ -520,9 +712,10 @@ mod tests {
     fn can_rage_quit() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal(robert(), 10, 10, "".to_string());
         let can = contract.can_rage_quit(0);
-        assert_eq!(can, false)
+        assert_eq!(can, true)
     }
 
     #[test]
