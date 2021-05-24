@@ -1,11 +1,11 @@
 extern crate near_sdk;
 
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::{env, near_bindgen, setup_alloc, AccountId, PanicOnDefault};
+use near_sdk::{near_bindgen, AccountId, PanicOnDefault};
 
 // Guild bank
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault, Debug)]
 pub struct GuildBank {
     token_id: AccountId,
 }
@@ -28,7 +28,7 @@ impl GuildBank {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use near_sdk::test_utils::{get_logs, VMContextBuilder};
+    use near_sdk::test_utils::VMContextBuilder;
     use near_sdk::MockedBlockchain;
     use near_sdk::{testing_env, VMContext};
     use std::convert::TryInto;
@@ -49,7 +49,7 @@ mod tests {
     fn withdraw() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = GuildBank::new(fdai());
+        let contract = GuildBank::new(fdai());
         let withdrew = contract.withdraw(robert(), 0, 0);
         assert_eq!(withdrew, false)
     }
