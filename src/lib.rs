@@ -503,7 +503,43 @@ impl Moloch {
             .as_bytes(),
         );
     }
-    pub fn abort(&self, proposal_index: u128) {}
+    pub fn abort(&self, proposal_index: u64) {
+        // Check if proposal index is within the length
+        assert!(
+            proposal_index < self.proposal_queue.len(),
+            "Proposal does not exist"
+        );
+        // Get the proposal
+        let mut proposal = self.proposal_queue.get(proposal_index).unwrap();
+        // Check sender is the applicant
+        assert!(
+            env::predecessor_account_id() == proposal.applicant,
+            "Calling account is not the proposal applicant"
+        );
+        // Check if abort window has passed
+        let current_period = self.get_current_period();
+        let abort_window = proposal.starting_period.saturating_add(self.abort_window);
+        assert!(current_period < abort_window, "Abort window has passed!");
+        // Check if proposal has been aborted
+        assert!(!proposal.aborted, "Proposal has already been aborted");
+        // Reset proposal params for abort
+        let token_tribute = proposal.token_tribute;
+        proposal.token_tribute = 0;
+        proposal.aborted = true;
+
+        let prepaid_gas = env::prepaid_gas();
+        ext_fungible_token::ft_transfer(
+            proposal.applicant,
+            U128::from(token_tribute),
+            Some("proposal token tribute returned".to_string()),
+            &self.token_id,
+            0,
+            prepaid_gas / 2,
+        );
+
+        // Log abort
+        env::log(format!("Proposal was aborted by {}", env::predecessor_account_id(),).as_bytes());
+    }
     pub fn update_delegate_key(&self, new_delegate: AccountId) {}
 
     // Getter functions
@@ -674,11 +710,15 @@ mod tests {
         contract.rage_quit(0);
     }
 
+    // TODO: Figure out how to Mock the moloch
+    // to avoid abort window length issues
     #[test]
+    #[should_panic(expected = r#"Abort window has passed!"#)]
     fn abort() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal(bob(), 10, 10, "".to_string());
         contract.abort(0);
     }
 
