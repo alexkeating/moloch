@@ -1,4 +1,5 @@
 extern crate chrono;
+// Add summoner to Member
 extern crate near_contract_standards;
 extern crate near_sdk;
 
@@ -107,12 +108,6 @@ impl Moloch {
         dilution_bound: u128,
         processing_reward: u128,
     ) -> Self {
-        // Validate passed in params
-        // Log Summon complete
-        // Add approved token to whitelist
-        // Set Global values
-        // Add summoner to Member
-
         assert!(
             env::is_valid_account_id(summoner.as_bytes()),
             "Summoner must be a valid account"
@@ -225,17 +220,23 @@ impl Moloch {
         let prepaid_gas = env::prepaid_gas();
         ext_fungible_token::ft_transfer(
             env::current_account_id(),
-            U128::from(token_tribute),
+            U128::from(self.proposal_deposit),
             Some("proposal token tribute".to_string()),
             &self.token_id,
             0,
             prepaid_gas / 2,
         );
-        // TODO: The applicant should also transfer
+        //  Proposer will also have to pay for applicant tribute
+        ext_fungible_token::ft_transfer(
+            env::current_account_id(),
+            U128::from(token_tribute),
+            Some("Applicant tribute".to_string()),
+            &self.token_id,
+            0,
+            prepaid_gas / 2,
+        );
 
         // 4. Calculate starting periond
-        // TODO: I don't really understand this step
-
         let mut period_based_on_queue = 0;
         let queue_len = self.proposal_queue.len();
         if queue_len != 0 {
@@ -386,9 +387,9 @@ impl Moloch {
 
         // Calculate total shares requested
         // This cannot overflow because an overflow was checked upon creation of the proposal
-        //let total_shares_requested = self
-        //    .total_shares_requested
-        //    .saturating_sub(proposal.shares_requested);
+        self.total_shares_requested = self
+            .total_shares_requested
+            .saturating_sub(proposal.shares_requested);
 
         // Check if proposal passed
         let mut passed = proposal.yes_votes > proposal.no_votes;
