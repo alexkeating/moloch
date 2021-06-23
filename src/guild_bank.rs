@@ -10,16 +10,14 @@ pub struct GuildBank {
     token_id: AccountId,
 }
 
-#[near_bindgen]
 impl GuildBank {
-    #[init]
     pub fn new(approved_token: AccountId) -> Self {
         Self {
             token_id: approved_token,
         }
     }
 
-    pub fn withdraw(&self, receiver: AccountId, shares: u128, total_shares: u128) -> bool {
+    pub fn withdraw(&self, _receiver: AccountId, _shares: u128, _total_shares: u128) -> bool {
         false
     }
 }
