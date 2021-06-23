@@ -25,45 +25,77 @@ setup_alloc!();
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Moloch {
+    /// The length of period
     period_duration: u128,
+    /// The number of periods in to vote on a proposal
     voting_period_length: u128,
+    /// The number of periods until a proposal is processed
     grace_period_length: u128,
+    /// Deposit needed to submit a proposal to combat spam
     proposal_deposit: u128,
+    /// Number of periods to abort submitted proposal
     abort_window: u128,
+    /// Maximum multiplier a YES voter will be obligated to pay in case of mass ragequit
     dilution_bound: u128,
+    /// Amount to give to whoever processes a proposal
     processing_reward: u128,
+    /// time used to determine the current period
     sumononing_time: u64,
+    /// Approved token to use payment
     token_id: AccountId,
+    /// Members in the DAO
     members: UnorderedMap<AccountId, Member>,
+    /// Members of the DAO related to their delegate key
     members_by_delegate_key: UnorderedMap<AccountId, AccountId>,
+    /// Total shares across all members
     total_shares: u128,
+    /// Is this even necessary???
     bank: guild_bank::GuildBank,
+    /// Total shares that have been requested in unprocessed proposals
     total_shares_requested: u128,
+    /// Array of proposals in the order they were submitted
     proposal_queue: Vector<Proposal>,
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Default, PartialEq)]
 pub struct Member {
+    /// The key responsible for submitting proposals and voting - defaults to accountIdD unless updated
     delegate_key: AccountId,
+    /// The number of shares assigned to this member
     shares: u128,
+    /// Always true once a member has been created
     exists: bool,
+    /// Highest proposal index number on which the member voted yes
     highest_index_yes_vote: u64,
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Default)]
 pub struct Proposal {
+    /// The member who submitted the proposal
     proposer: AccountId,
+    /// The applicant who wishes to become a member - this will be used for withdrawls
     applicant: AccountId,
+    /// The number of shares the applicant is requesting
     shares_requested: u128,
+    /// The period in which voting can start for this proposal
     starting_period: u128,
+    /// The total number of yes votes for this proposal
     yes_votes: u128,
+    /// The total number of no voters for this prososal
     no_votes: u128,
+    /// true if the proposal has been processed
     processed: bool,
+    /// true only if the proposal has passed
     did_pass: bool,
+    /// true only if an applicant calls the "abort" function before the end of the voting period
     aborted: bool,
+    /// Amount of tokens offered as tribute
     token_tribute: u128,
+    /// The proposal details - could be an IPFS hash, plaintext, or JSON
     details: String,
+    /// The maximum number of total shares encountered at a yes vote on this proposal
     max_total_shares_at_yes_vote: u128,
+    /// Mapping of votes for each member
     votes_by_member: HashMap<AccountId, Vote>,
 }
 
@@ -74,6 +106,7 @@ pub type TokenId = u64;
 pub enum Vote {
     Yes,
     No,
+    /// Counts as abstention
     Null,
 }
 
@@ -631,7 +664,8 @@ impl Moloch {
         };
     }
 
-    // helper function
+    /// Checks that previous caller is the delegateKey of a
+    /// member with at least 1 share
     fn only_delegate(&self) {
         let delegate_key = match self
             .members_by_delegate_key
@@ -643,6 +677,7 @@ impl Moloch {
         assert!(delegate_key != "".to_string(), "Account is not a delegate");
     }
 
+    /// Checks that the calling account is the address of a member with at least 1 share
     fn only_member(&self) {
         let member = match self.members.get(&env::predecessor_account_id()) {
             Some(member) => member,
