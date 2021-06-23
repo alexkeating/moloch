@@ -121,11 +121,6 @@ impl Vote {
     }
 }
 
-// Add constructor from the NFT example
-// Then start implmenting each function and
-// modifing the test
-//
-// NFT example also has good examples of modifier uses
 #[near_bindgen]
 impl Moloch {
     #[init]
@@ -189,8 +184,6 @@ impl Moloch {
         // create guild bank
         let bank = guild_bank::GuildBank::new(approved_token.clone());
 
-        // TODO: Add Delegate key map, going to omit now because it does not seem necessary
-        // Moloch settings
         let mut members = UnorderedMap::new(b"members".to_vec());
         members.insert(
             &summoner,
@@ -226,6 +219,22 @@ impl Moloch {
             proposal_queue: Vector::new(b"proposal_queue".to_vec()),
         }
     }
+
+    /// At any time members can submit a new proposal using their delegate_key
+    ///
+    /// 1. This function will update the total requested shares with requested shares \
+    /// from this proposal.
+    /// 2. It will also transfer the proposal deposit to escrow until the proposal vote is
+    /// completed and processed
+    /// 3. Calculates the proposal starting period, creates a new proposal and adds it to the
+    /// proposal_queue.
+    ///
+    /// If there are no proposals in the queue or if all the proposals in the queue have already
+    /// started their respective voting period, then the proposal start_period will be set to the
+    /// next period after the last proposal in the queue.
+    ///
+    /// Existing members can earn additional voting shares through new proposals if they are listed
+    /// as the applicant.
     #[payable]
     pub fn submit_proposal(
         &mut self,
@@ -302,6 +311,17 @@ impl Moloch {
         env::log(format!("Proposal submitted! proposal_index: {}, sender: {}, member_address: {}, applicant: {}, token_tribute: {}, shares_requested: {} ", proposal_index, env::predecessor_account_id(), proposal.proposer, proposal.applicant, token_tribute, shares_requested).as_bytes());
     }
 
+    /// While a proposal is in its voting period, members can submit their vote using their
+    /// delegate_key.
+    ///
+    /// This function:
+    /// 1. Saves the vote on proposal by member address
+    /// 2. Based on the vote, adds the member's voting shares to the proposal yesVotes or noVote
+    ///    tallies
+    /// 3. If the member voted Yes and this is now the highest index proposal they voted yes on, it
+    ///    updates theif highest_index_yes_vote
+    /// 4. If the member voted Yes and this is now the most total shares that the Guild had during
+    ///    any Yes vote, update the proposal max_total_shares_at_yes_vote.
     pub fn submit_vote(&mut self, proposal_index: u64, uint_vote: u8) {
         // 0. delegate check
         self.only_delegate();
@@ -377,6 +397,37 @@ impl Moloch {
         )
     }
 
+    /// After a proposal has completed its grace period, anyone can call process_proposal to tally
+    /// the votes and either accept or reject it. The caller will receive a reward for processing
+    /// the proposal.
+    ///
+    /// 1. Sets proposal.processsed = true to prevent duplicate processing
+    /// 2. Update total_shares_requested to no longer have the shares requested in the processed
+    ///    proposal
+    /// 3. Determine if the proposal passed or failed based on the votes and whether or not the
+    ///    dilution bound was exceeded
+    /// 4. If the proposal passed
+    ///    4.1. If the applicant is an existing member, add the requested shares to their existing
+    ///      shares to their existing shares
+    ///    4.2. If the applicant is a new member, save their data and set their default delegate_key
+    ///      to be the same as their member address
+    ///      4.2.1. For new members, if the member address is taken by an existing member's
+    ///        delegate_key forcibly reset that member's delegate_key to their member address.
+    ///    4.3. Update the total shares
+    ///    4.4  Transfer the tribute being held in escrow to the guild bank
+    /// 5. Otherwise: return all the tribute being held in escrow to the applicant
+    /// 6. Send a processing reward to the address that called this function
+    /// 7. Send the proposal deposit minus the processing reward to the proposer
+    ///
+    /// The dilution_bound is a safety net mechanism designed to prevent a memeber from facing a
+    /// potentially unbounded grant obligation if they vote YES on a passing proposal and the vast
+    /// majority of the other members ragequit before it is processed. The
+    /// proposal.max_total_vote_shares_at_yes_no will be the highest total shares at the time of
+    /// the yes vote on the proposal. When the proposal is being processed, if members have have
+    /// ragequit and the total shares have dropped by more than the dilution_bound (default=3), the proposal
+    /// will fail. This means that members voting yes will only be obligated to contribute at most
+    /// 3x what they were willing to contribute their share of the proposal cost, if 2/3 of the
+    /// shares ragequit
     pub fn process_proposal(&mut self, proposal_index: u64) {
         assert!(
             proposal_index < self.proposal_queue.len(),
@@ -509,6 +560,15 @@ impl Moloch {
             .as_bytes(),
         )
     }
+
+    /// A member can ragequit at any time, so long as the member has not voted Yes on any proposal
+    /// in the voting period or grace period, they can irreversibly destroy some of their shares
+    /// and receive a proportional sum of the approved token from the Guild Bank.
+    ///
+    /// 1. Reduce the member's shares by the shares_to_burn being destroyed
+    /// 2. Reduce the total shares by the shares_to_burn
+    /// 3. Instruct the guild bank to send the member their proportional amount of the approved
+    ///    token
     pub fn rage_quit(&mut self, shares_to_burn: u128) {
         // only_member modifier
         self.only_member();
@@ -539,6 +599,9 @@ impl Moloch {
             .as_bytes(),
         );
     }
+
+    /// With the new architecture I don't know if this necessary
+    /// Some new logic might be good if the applicant does not add their tribute
     pub fn abort(&self, proposal_index: u64) {
         // Check if proposal index is within the length
         assert!(
@@ -576,6 +639,15 @@ impl Moloch {
         // Log abort
         env::log(format!("Proposal was aborted by {}", env::predecessor_account_id(),).as_bytes());
     }
+
+    /// By default when a member is accepted their delegateKey is set to their member accountId. At
+    /// any time, they can change it to be any accountId that is not in use, or back to their
+    /// accountId.
+    ///
+    /// 1. Reset the old delegate_key reference in the members_by_delegate_key mapping
+    /// 2. Sets the references for the new delegate_key to the member in the
+    ///    members_by_delegate_key mapping.
+    /// 3. Updates the member delegate_key
     pub fn update_delegate_key(&mut self, new_delegate_key: AccountId) {
         self.only_member();
         // Delegate key cannot be 0
@@ -625,15 +697,20 @@ impl Moloch {
     }
 
     // Getter functions
+
+    /// The difference between the block_timestamp and the summoning_time is used to figure out how
+    /// many periods have elapsed and thus what the current period is.
     pub fn get_current_period(&self) -> u128 {
         let period_64 = env::block_timestamp().saturating_sub(self.sumononing_time);
         u128::from(period_64).wrapping_div(self.period_duration)
     }
 
+    /// Returns the length of the proposal queue
     pub fn get_proposal_queue_length(&self) -> u64 {
         return self.proposal_queue.len();
     }
 
+    /// Returns true if the highest_index_yes_vote has been processed
     pub fn can_rage_quit(&self, highest_index_yes_vote: u64) -> bool {
         assert!(
             highest_index_yes_vote < self.proposal_queue.len(),
