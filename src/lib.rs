@@ -13,6 +13,7 @@ use serde::Serialize;
 use std::cmp::max;
 use std::collections::HashMap;
 
+mod ft_callbacks;
 mod guild_bank;
 
 // Implement Moloch Contract
@@ -75,6 +76,8 @@ pub struct Proposal {
     proposer: AccountId,
     /// The applicant who wishes to become a member - this will be used for withdrawls
     applicant: AccountId,
+    /// Whether the applicant has sent a proposals tribute
+    applicant_has_tributed: bool,
     /// The number of shares the applicant is requesting
     shares_requested: u128,
     /// The period in which voting can start for this proposal
@@ -267,17 +270,14 @@ impl Moloch {
         let prepaid_gas = env::prepaid_gas();
         ext_fungible_token::ft_transfer(
             env::current_account_id(),
-            U128::from(token_tribute),
+            U128::from(self.proposal_deposit),
             Some("proposal token tribute".to_string()),
             &self.token_id,
             0,
             prepaid_gas / 2,
         );
-        // TODO: The applicant should also transfer
 
         // 4. Calculate starting periond
-        // TODO: I don't really understand this step
-
         let mut period_based_on_queue = 0;
         let queue_len = self.proposal_queue.len();
         if queue_len != 0 {
@@ -303,12 +303,45 @@ impl Moloch {
             details: details,
             max_total_shares_at_yes_vote: 0,
             votes_by_member: HashMap::new(),
+            applicant_has_tributed: false,
         };
         self.proposal_queue.push(&proposal);
         let proposal_index = self.proposal_queue.len().saturating_sub(1);
 
         // 6. Log
         env::log(format!("Proposal submitted! proposal_index: {}, sender: {}, member_address: {}, applicant: {}, token_tribute: {}, shares_requested: {} ", proposal_index, env::predecessor_account_id(), proposal.proposer, proposal.applicant, token_tribute, shares_requested).as_bytes());
+    }
+
+    #[payable]
+    pub fn send_applicant_tribute(&mut self, proposal_index: u64) {
+        // Caller must be an active applicant
+        // Get proposal and check that the account id matches the proposal applicant id
+        //
+        // If active applicant find proposal
+        let mut proposal = match self.proposal_queue.get(proposal_index) {
+            Some(proposal) => proposal,
+            None => panic!("Proposal index does not exist in prooposal queue"),
+        };
+
+        let caller = env::predecessor_account_id();
+        assert!(
+            proposal.applicant == caller,
+            "Caller is not applicant of this proposal"
+        );
+        assert!(proposal.aborted == false, "Proposal has been aborted");
+        assert!(proposal.processed == false, "Proposal has been processed");
+
+        let prepaid_gas = env::prepaid_gas();
+        ext_fungible_token::ft_transfer(
+            env::current_account_id(),
+            U128::from(proposal.token_tribute),
+            Some("proposal token tribute".to_string()),
+            &self.token_id,
+            0,
+            prepaid_gas / 2,
+        );
+
+        proposal.applicant_has_tributed = true
     }
 
     /// While a proposal is in its voting period, members can submit their vote using their
@@ -469,10 +502,9 @@ impl Moloch {
         proposal.processed = true;
 
         // Calculate total shares requested
-        // This cannot overflow because an overflow was checked upon creation of the proposal
-        //let total_shares_requested = self
-        //    .total_shares_requested
-        //    .saturating_sub(proposal.shares_requested);
+        self.total_shares_requested = self
+            .total_shares_requested
+            .saturating_sub(proposal.shares_requested);
 
         // Check if proposal passed
         let mut passed = proposal.yes_votes > proposal.no_votes;
@@ -485,7 +517,7 @@ impl Moloch {
             passed = false
         };
 
-        if passed == true && !proposal.aborted {
+        if passed == true && !proposal.aborted && proposal.applicant_has_tributed {
             proposal.did_pass = true;
             let member_exists = match self.members.get(&proposal.applicant) {
                 Some(_) => true,
@@ -512,7 +544,7 @@ impl Moloch {
                     member.delegate_key = member_delegate_key;
                 };
 
-                // TODO: I don't really get this logic
+                // Use applicant account id as delegate key by default
                 self.members.insert(
                     &proposal.applicant,
                     &Member {
@@ -525,26 +557,56 @@ impl Moloch {
                 self.members_by_delegate_key
                     .insert(&proposal.applicant, &proposal.applicant);
 
-                // let shares = self.total_shares.saturating_add(proposal.shares_requested);
-                // TODO Transfer to guild bank
-                // Send from this contract to the
-                // guild contract
-                // let prepaid_gas = env::prepaid_gas();
-                // ext_fungible_token::ft_transfer_call(
-                //     self.bank.to_string(),
-                //     U128::from(proposal.token_tribute),
-                //     None,
-                //     "proposal token tribute for passed proposal".to_string(),
-                //     &self.token_id,
-                //     0,
-                //     prepaid_gas / 2,
-                // );
-                // assert!()
-                // How to get bank id
+                self.total_shares = self.total_shares.saturating_add(proposal.shares_requested);
+                // TODO: Do these promises need to be one after the other
+                // Can I await these
+                let prepaid_gas = env::prepaid_gas();
+                ext_fungible_token::ft_transfer_call(
+                    env::current_account_id(),
+                    U128::from(proposal.token_tribute),
+                    None,
+                    "proposal token tribute for passed proposal".to_string(),
+                    &self.token_id,
+                    0,
+                    prepaid_gas / 2,
+                );
+                // TODO: Orginal contract asserts this is successfull
             }
+        // Proposal failed and applicant submitted
+        } else if proposal.applicant_has_tributed {
+            let prepaid_gas = env::prepaid_gas();
+            ext_fungible_token::ft_transfer(
+                proposal.applicant.clone(),
+                U128::from(proposal.token_tribute),
+                Some("return proposal token tribute for failed proposal".to_string()),
+                &self.token_id,
+                0,
+                prepaid_gas / 2,
+            );
         }
-        // Another else path with a transfer
-        // a bunch more transfers
+
+        // TODO: Are these rolled back if the transaction failed
+        // Pay processing reward
+        let prepaid_gas = env::prepaid_gas();
+        ext_fungible_token::ft_transfer(
+            env::predecessor_account_id(),
+            U128::from(proposal.token_tribute),
+            Some("pay out processing reward for processing proposal".to_string()),
+            &self.token_id,
+            0,
+            prepaid_gas / 2,
+        );
+
+        // Return proposer deposit
+        let prepaid_gas = env::prepaid_gas();
+        ext_fungible_token::ft_transfer(
+            proposal.proposer.clone(),
+            U128::from(self.proposal_deposit.saturating_sub(self.processing_reward)),
+            Some("return proposal deposit for processed proposal".to_string()),
+            &self.token_id,
+            0,
+            prepaid_gas / 2,
+        );
 
         // Log processed proposal
         env::log(
@@ -600,8 +662,9 @@ impl Moloch {
         );
     }
 
-    /// With the new architecture I don't know if this necessary
-    /// Some new logic might be good if the applicant does not add their tribute
+    /// To avoid a situation where an applicant does not send their tribute in a
+    /// timely manner to the proposal the proposer can abort the proposal in order to not
+    /// pay the processing reward
     pub fn abort(&self, proposal_index: u64) {
         // Check if proposal index is within the length
         assert!(
@@ -612,9 +675,14 @@ impl Moloch {
         let mut proposal = self.proposal_queue.get(proposal_index).unwrap();
         // Check sender is the applicant
         assert!(
-            env::predecessor_account_id() == proposal.applicant,
-            "Calling account is not the proposal applicant"
+            env::predecessor_account_id() == proposal.proposer,
+            "Calling account is not the proposal proposer"
         );
+        assert!(
+            proposal.applicant_has_tributed == false,
+            "Proposal already has tribute"
+        );
+
         // Check if abort window has passed
         let current_period = self.get_current_period();
         let abort_window = proposal.starting_period.saturating_add(self.abort_window);
@@ -622,15 +690,14 @@ impl Moloch {
         // Check if proposal has been aborted
         assert!(!proposal.aborted, "Proposal has already been aborted");
         // Reset proposal params for abort
-        let token_tribute = proposal.token_tribute;
-        proposal.token_tribute = 0;
         proposal.aborted = true;
 
+        // return deposit
         let prepaid_gas = env::prepaid_gas();
         ext_fungible_token::ft_transfer(
-            proposal.applicant,
-            U128::from(token_tribute),
-            Some("proposal token tribute returned".to_string()),
+            proposal.proposer,
+            U128::from(self.proposal_deposit),
+            Some("Return the submitted proposal deposit".to_string()),
             &self.token_id,
             0,
             prepaid_gas / 2,

@@ -1,24 +1,50 @@
 extern crate near_sdk;
 
+use near_contract_standards::fungible_token::core_impl::ext_fungible_token;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::{near_bindgen, AccountId, PanicOnDefault};
+use near_sdk::json_types::U128;
+use near_sdk::{env, near_bindgen, AccountId, PanicOnDefault};
 
 // Guild bank
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault, Debug)]
 pub struct GuildBank {
     token_id: AccountId,
+    balance: u128,
 }
 
 impl GuildBank {
     pub fn new(approved_token: AccountId) -> Self {
         Self {
             token_id: approved_token,
+            balance: 0,
         }
     }
 
-    pub fn withdraw(&self, _receiver: AccountId, _shares: u128, _total_shares: u128) -> bool {
-        false
+    pub fn withdraw(&self, receiver: AccountId, shares: u128, total_shares: u128) {
+        let amount = match self
+            .balance
+            .saturating_mul(shares)
+            .checked_div(total_shares)
+        {
+            Some(amount) => amount,
+            None => panic!("Total shares is 0 a withdrawl cannot be calculated"),
+        };
+        env::log(format!("Withdrawl: receiver: {}, amount: {}", receiver, amount).as_bytes());
+        let prepaid_gas = env::prepaid_gas();
+        ext_fungible_token::ft_transfer(
+            receiver,
+            U128::from(amount),
+            Some("Withdrawl from guild bank".to_string()),
+            &self.token_id,
+            0,
+            prepaid_gas / 2,
+        );
+    }
+
+    pub fn deposit(&mut self, amount: u128) -> u128 {
+        self.balance += amount;
+        return self.balance;
     }
 }
 
@@ -48,7 +74,6 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let contract = GuildBank::new(fdai());
-        let withdrew = contract.withdraw(robert(), 0, 0);
-        assert_eq!(withdrew, false)
+        contract.withdraw(robert(), 0, 1);
     }
 }
