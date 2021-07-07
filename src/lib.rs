@@ -70,7 +70,7 @@ pub struct Member {
     highest_index_yes_vote: u64,
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Default)]
+#[derive(BorshDeserialize, BorshSerialize, Default, PartialEq, Debug)]
 pub struct Proposal {
     /// The member who submitted the proposal
     proposer: AccountId,
@@ -257,7 +257,10 @@ impl Moloch {
             self.total_shares.overflowing_add(shares_requested);
         assert!(!shares_requested_overflow, "Too many shares were requested");
         let (_, shares_overflow) = shares_with_request.overflowing_add(self.total_shares_requested);
-        assert!(!shares_overflow, "Too many shares were requested");
+        assert!(
+            !shares_overflow,
+            "Too many shares were requested: due to outstanding shares requested"
+        );
 
         // 2. Add shares
         self.total_shares_requested = self.total_shares_requested.saturating_add(shares_requested);
@@ -277,7 +280,7 @@ impl Moloch {
             prepaid_gas / 2,
         );
 
-        // 4. Calculate starting periond
+        // 4. Calculate starting period
         let mut period_based_on_queue = 0;
         let queue_len = self.proposal_queue.len();
         if queue_len != 0 {
@@ -857,12 +860,33 @@ mod tests {
     fn fdai() -> AccountId {
         "fdai.testnet".to_string()
     }
+
+    /// Tests for submit propposal
     #[test]
     fn submit_proposal() {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal(robert(), 10, 10, "".to_string());
+        contract.submit_proposal(robert(), 12, 10, "".to_string());
+
+        let proposal = contract.proposal_queue.get(0);
+        let expected_proposal = Proposal {
+            proposer: bob(),
+            applicant: robert(),
+            shares_requested: 10,
+            starting_period: 0,
+            yes_votes: 0,
+            no_votes: 0,
+            processed: false,
+            did_pass: false,
+            aborted: false,
+            token_tribute: 12,
+            details: "".to_string(),
+            max_total_shares_at_yes_vote: 0,
+            votes_by_member: HashMap::new(),
+            applicant_has_tributed: false,
+        };
+        assert_eq!(proposal.unwrap(), expected_proposal)
     }
 
     // TODO: Make these error strings a constant
@@ -873,6 +897,27 @@ mod tests {
         testing_env!(context);
         let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
         contract.submit_proposal("".to_string(), 10, 10, "".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Too many shares were requested"#)]
+    fn submit_proposal_shares_requested_overflow() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal(robert(), 10, u128::MAX, "".to_string());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = r#"Too many shares were requested: due to outstanding shares requested"#
+    )]
+    fn submit_proposal_total_shares_requested_overflow() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        contract.submit_proposal(robert(), 10, u128::MAX.saturating_sub(1), "".to_string());
+        contract.submit_proposal(robert(), 10, 1, "".to_string());
     }
 
     #[test]
