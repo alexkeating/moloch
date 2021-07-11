@@ -26,7 +26,7 @@ setup_alloc!();
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Moloch {
-    /// The length of period
+    /// The length of period in non_leap nanoseconds
     period_duration: u128,
     /// The number of periods in to vote on a proposal
     voting_period_length: u128,
