@@ -1,3 +1,16 @@
+[package]
+name = "moloch-wrapper"
+version = "0.0.1"
+authors = [""]
+edition = "2018"
+
+
+[dev-dependencies]
+near-sdk = "3.1.0"
+near-sdk-sim = "3.2.0"
+moloch = { path = "./moloch" }
+test-fungible-token = { path = "./test-fungible-token" }
+
 [workspace]
 # remember to include a member for each contract
 members = [

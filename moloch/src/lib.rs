@@ -130,19 +130,21 @@ impl Moloch {
     pub fn new(
         summoner: AccountId,
         approved_token: AccountId,
-        period_duration: u128,
-        voting_period_length: u128,
-        grace_period_length: u128,
-        abort_window: u128,
-        proposal_deposit: u128,
-        dilution_bound: u128,
-        processing_reward: u128,
+        period_duration: U128,
+        voting_period_length: U128,
+        grace_period_length: U128,
+        abort_window: U128,
+        proposal_deposit: U128,
+        dilution_bound: U128,
+        processing_reward: U128,
     ) -> Self {
-        // Validate passed in params
-        // Log Summon complete
-        // Add approved token to whitelist
-        // Set Global values
-        // Add summoner to Member
+        let _period_duration = u128::from(period_duration);
+        let _voting_period_length = u128::from(voting_period_length);
+        let _grace_period_length = u128::from(grace_period_length);
+        let _abort_window = u128::from(dilution_bound);
+        let _proposal_deposit = u128::from(proposal_deposit);
+        let _dilution_bound = u128::from(dilution_bound);
+        let _processing_reward = u128::from(processing_reward);
 
         assert!(
             env::is_valid_account_id(summoner.as_bytes()),
@@ -155,33 +157,33 @@ impl Moloch {
         );
 
         assert!(
-            period_duration > 0,
+            _period_duration > 0,
             "period_duration must be greater than 0"
         );
         assert!(
-            voting_period_length > 0,
+            _voting_period_length > 0,
             "poting_period length must be greater than 0"
         );
         assert!(
-            voting_period_length <= MAX_VOTING_PERIOD_LENGTH,
+            _voting_period_length <= MAX_VOTING_PERIOD_LENGTH,
             "voting_period length must be less than the max voting period"
         );
         assert!(
-            grace_period_length <= MAX_GRACE_PERIOD_LENGTH,
+            _grace_period_length <= MAX_GRACE_PERIOD_LENGTH,
             "grace_period exceeds max grace period"
         );
-        assert!(abort_window > 0, "Abort window cannot be 0");
+        assert!(_abort_window > 0, "Abort window cannot be 0");
         assert!(
-            abort_window <= voting_period_length,
+            _abort_window <= _voting_period_length,
             "abort_window must be smaller than the voting_period_length"
         );
-        assert!(dilution_bound > 0, "dilution_bound cannot be 0");
+        assert!(_dilution_bound > 0, "dilution_bound cannot be 0");
         assert!(
-            dilution_bound <= MAX_DILUTION_BOUND,
+            _dilution_bound <= MAX_DILUTION_BOUND,
             "dilution_bound exceeds max dilution bound"
         );
         assert!(
-            proposal_deposit >= processing_reward,
+            _proposal_deposit >= _processing_reward,
             "proposal_deposit cannot be smaller than processing reward"
         );
 
@@ -206,13 +208,13 @@ impl Moloch {
         env::log(format!("Summon complete by {} with 1 share!", summoner).as_bytes());
 
         Self {
-            period_duration: period_duration,
-            voting_period_length: voting_period_length,
-            grace_period_length: grace_period_length,
-            proposal_deposit: proposal_deposit,
-            abort_window: abort_window,
-            dilution_bound: dilution_bound,
-            processing_reward: processing_reward,
+            period_duration: _period_duration,
+            voting_period_length: _voting_period_length,
+            grace_period_length: _grace_period_length,
+            proposal_deposit: _proposal_deposit,
+            abort_window: _abort_window,
+            dilution_bound: _dilution_bound,
+            processing_reward: _processing_reward,
             token_id: approved_token,
             sumononing_time: env::block_timestamp(),
             members: members,
