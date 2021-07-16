@@ -1,4 +1,5 @@
 use moloch::MolochContract;
+use near_sdk::serde_json::json;
 use near_sdk_sim::{call, deploy, init_simulator, to_yocto, ContractAccount, UserAccount};
 use test_fungible_token::ContractContract as FdaiContract;
 
@@ -10,6 +11,22 @@ near_sdk_sim::lazy_static_include::lazy_static_include_bytes! {
 const MOLOCH_ID: &str = "moloch";
 const FDAI_ID: &str = "fdai";
 
+// Register the given `user` with FT contract
+pub fn register_user(user: &near_sdk_sim::UserAccount) {
+    user.call(
+        FDAI_ID.parse().unwrap(),
+        "storage_deposit",
+        &json!({
+            "account_id": user.account_id()
+        })
+        .to_string()
+        .into_bytes(),
+        near_sdk_sim::DEFAULT_GAS / 2,
+        near_sdk::env::storage_byte_cost() * 125, // attached deposit
+    )
+    .assert_success();
+}
+
 pub fn init_moloch() -> (
     UserAccount,
     ContractAccount<MolochContract>,
@@ -19,24 +36,29 @@ pub fn init_moloch() -> (
 ) {
     let root = init_simulator(None);
 
-    let alice = root.create_user("alice".to_string(), to_yocto("100"));
-    let bob = root.create_user("bob".to_string(), to_yocto("100"));
-
     let fdai = deploy!(
        contract: FdaiContract,
        contract_id: FDAI_ID,
        bytes: &FDAI_WASM_BYTES,
        signer_account: root,
-       init_method: new_default_meta(root.valid_account_id(), 1000.into())
+       init_method: new_default_meta(root.valid_account_id(), to_yocto("900").into())
     );
 
+    let alice = root.create_user("alice".to_string(), to_yocto("100"));
+    let bob = root.create_user("bob".to_string(), to_yocto("100"));
+    register_user(&alice);
+    register_user(&bob);
+    register_user(&root);
+
+    println!("Account Id");
+    println!("{:?}", fdai.user_account.account_id.to_string());
     let moloch = deploy!(
         contract: MolochContract,
         contract_id: MOLOCH_ID,
         bytes: &MOLOCH_WASM_BYTES,
         signer_account: root,
         init_method: new(
-            root.valid_account_id().to_string(),
+            bob.valid_account_id().to_string(),
             fdai.user_account.account_id.to_string(),
             // nanoseconds
              10u128.pow(9).into(),
@@ -49,6 +71,8 @@ pub fn init_moloch() -> (
              )
     );
 
+    register_user(&moloch.user_account);
+
     call!(
         root,
         fdai.ft_transfer(alice.valid_account_id(), to_yocto("100").into(), None),
@@ -59,6 +83,17 @@ pub fn init_moloch() -> (
     call!(
         root,
         fdai.ft_transfer(bob.valid_account_id(), to_yocto("100").into(), None),
+        deposit = 1
+    )
+    .assert_success();
+
+    call!(
+        root,
+        fdai.ft_transfer(
+            moloch.user_account.valid_account_id(),
+            to_yocto("100").into(),
+            None
+        ),
         deposit = 1
     )
     .assert_success();

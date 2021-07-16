@@ -141,10 +141,10 @@ impl Moloch {
         let _period_duration = u128::from(period_duration);
         let _voting_period_length = u128::from(voting_period_length);
         let _grace_period_length = u128::from(grace_period_length);
-        let _abort_window = u128::from(dilution_bound);
         let _proposal_deposit = u128::from(proposal_deposit);
         let _dilution_bound = u128::from(dilution_bound);
         let _processing_reward = u128::from(processing_reward);
+        let _abort_window = u128::from(abort_window);
 
         assert!(
             env::is_valid_account_id(summoner.as_bytes()),
@@ -247,19 +247,22 @@ impl Moloch {
     pub fn submit_proposal(
         &mut self,
         applicant: AccountId,
-        token_tribute: u128,
-        shares_requested: u128,
+        token_tribute: U128,
+        shares_requested: U128,
         details: String,
     ) {
         // 0. delegate check
         self.only_delegate();
+        let _token_tribute = u128::from(token_tribute);
+        let _shares_requested = u128::from(shares_requested);
+
         // 1. A couple logic checks
         assert!(
             env::is_valid_account_id(applicant.as_bytes()),
             "applicant must be a valid account id"
         );
         let (shares_with_request, shares_requested_overflow) =
-            self.total_shares.overflowing_add(shares_requested);
+            self.total_shares.overflowing_add(_shares_requested);
         assert!(!shares_requested_overflow, "Too many shares were requested");
         let (_, shares_overflow) = shares_with_request.overflowing_add(self.total_shares_requested);
         assert!(
@@ -268,7 +271,9 @@ impl Moloch {
         );
 
         // 2. Add shares
-        self.total_shares_requested = self.total_shares_requested.saturating_add(shares_requested);
+        self.total_shares_requested = self
+            .total_shares_requested
+            .saturating_add(_shares_requested);
         // 3. get delegate key
         // only_delegate checks above
         let member_id = self
@@ -276,12 +281,27 @@ impl Moloch {
             .get(&env::predecessor_account_id())
             .unwrap();
         let prepaid_gas = env::prepaid_gas();
+
+        // Helpful logs
+        // env::log(
+        //     format!(
+        //         "predecessor {} {} {} {}",
+        //         env::predecessor_account_id(),
+        //         env::current_account_id(),
+        //         env::signer_id(),
+        //         &self.proposal_deposit,
+        //         &self.token_id
+        //     )
+        //     .as_bytes(),
+        // );
+        // If this fails then the whole transaction is not rolled back
+        // There should probably be some then logic
         ext_fungible_token::ft_transfer(
             env::current_account_id(),
             U128::from(self.proposal_deposit),
             Some("proposal token tribute".to_string()),
             &self.token_id,
-            0,
+            1,
             prepaid_gas / 2,
         );
 
@@ -301,14 +321,14 @@ impl Moloch {
         let proposal = Proposal {
             proposer: member_id,
             applicant: applicant,
-            shares_requested: shares_requested,
+            shares_requested: _shares_requested,
             starting_period: starting_period,
             yes_votes: 0,
             no_votes: 0,
             processed: false,
             did_pass: false,
             aborted: false,
-            token_tribute: token_tribute,
+            token_tribute: _token_tribute,
             details: details,
             max_total_shares_at_yes_vote: 0,
             votes_by_member: HashMap::new(),
@@ -318,7 +338,7 @@ impl Moloch {
         let proposal_index = self.proposal_queue.len().saturating_sub(1);
 
         // 6. Log
-        env::log(format!("Proposal submitted! proposal_index: {}, sender: {}, member_address: {}, applicant: {}, token_tribute: {}, shares_requested: {}", proposal_index, env::predecessor_account_id(), proposal.proposer, proposal.applicant, token_tribute, shares_requested).as_bytes());
+        env::log(format!("Proposal submitted! proposal_index: {}, sender: {}, member_address: {}, applicant: {}, token_tribute: {}, shares_requested: {}", proposal_index, env::predecessor_account_id(), proposal.proposer, proposal.applicant, _token_tribute, _shares_requested).as_bytes());
     }
 
     #[payable]
@@ -866,18 +886,27 @@ mod tests {
         "fdai.testnet".to_string()
     }
 
-    // For integration test
-    // fn test_token() -> Contract {
-    //     Contract::new_default_meta(accounts(0), TOTAL_SUPPLY.into())
-    // }
+    fn default_moloch() -> Moloch {
+        Moloch::new(
+            bob(),
+            fdai(),
+            10.into(),
+            10.into(),
+            10.into(),
+            10.into(),
+            100.into(),
+            10.into(),
+            10.into(),
+        )
+    }
 
     /// Tests for submit propposal
     #[test]
     fn submit_proposal() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal(robert(), 12, 10, "".to_string());
+        let mut contract = default_moloch();
+        contract.submit_proposal(robert(), 12.into(), 10.into(), "".to_string());
 
         let proposal = contract.proposal_queue.get(0);
         let expected_proposal = Proposal {
@@ -911,12 +940,12 @@ mod tests {
     fn submit_proposal_multiple_proposals() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal(robert(), 12, 10, "".to_string());
+        let mut contract = default_moloch();
+        contract.submit_proposal(robert(), 12.into(), 10.into(), "".to_string());
 
         let context = get_context(false);
         testing_env!(context);
-        contract.submit_proposal(robert(), 20, 20, "".to_string());
+        contract.submit_proposal(robert(), 20.into(), 20.into(), "".to_string());
 
         let proposal = contract.proposal_queue.get(1);
         let expected_proposal = Proposal {
@@ -945,8 +974,8 @@ mod tests {
     fn submit_proposal_invalid_account() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal("".to_string(), 10, 10, "".to_string());
+        let mut contract = default_moloch();
+        contract.submit_proposal("".to_string(), 10.into(), 10.into(), "".to_string());
     }
 
     #[test]
@@ -954,8 +983,8 @@ mod tests {
     fn submit_proposal_shares_requested_overflow() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal(robert(), 10, u128::MAX, "".to_string());
+        let mut contract = default_moloch();
+        contract.submit_proposal(robert(), 10.into(), u128::MAX.into(), "".to_string());
     }
 
     #[test]
@@ -965,9 +994,14 @@ mod tests {
     fn submit_proposal_total_shares_requested_overflow() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal(robert(), 10, u128::MAX.saturating_sub(1), "".to_string());
-        contract.submit_proposal(robert(), 10, 1, "".to_string());
+        let mut contract = default_moloch();
+        contract.submit_proposal(
+            robert(),
+            10.into(),
+            u128::MAX.saturating_sub(1).into(),
+            "".to_string(),
+        );
+        contract.submit_proposal(robert(), 10.into(), 1.into(), "".to_string());
     }
 
     #[test]
@@ -975,8 +1009,18 @@ mod tests {
     fn submit_proposal_not_delegate() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal(robert(), 10, 10, "".to_string());
+        let mut contract = Moloch::new(
+            robert(),
+            fdai(),
+            10.into(),
+            10.into(),
+            10.into(),
+            10.into(),
+            100.into(),
+            10.into(),
+            10.into(),
+        );
+        contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
     }
 
     // Voting has not begun yet
@@ -1009,8 +1053,18 @@ mod tests {
     fn process_proposal_not_delegate() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal(robert(), 10, 10, "".to_string());
+        let mut contract = Moloch::new(
+            robert(),
+            fdai(),
+            10.into(),
+            10.into(),
+            10.into(),
+            10.into(),
+            100.into(),
+            10.into(),
+            10.into(),
+        );
+        contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
         contract.process_proposal(0);
     }
 
@@ -1019,8 +1073,18 @@ mod tests {
     fn process_proposal_not_ready_to_be_processed() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(bob(), fdai(), 1000000000000000000, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal(robert(), 10, 10, "".to_string());
+        let mut contract = Moloch::new(
+            bob(),
+            fdai(),
+            1000000000000000000.into(),
+            10.into(),
+            10.into(),
+            10.into(),
+            100.into(),
+            10.into(),
+            10.into(),
+        );
+        contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
         contract.process_proposal(0);
     }
 
@@ -1028,8 +1092,8 @@ mod tests {
     fn rage_quit() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal(robert(), 10, 10, "".to_string());
+        let mut contract = default_moloch();
+        contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
         contract.rage_quit(0);
     }
 
@@ -1049,7 +1113,7 @@ mod tests {
     fn update_delegate_key() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        let mut contract = default_moloch();
         contract.update_delegate_key("soda".to_string());
     }
 
@@ -1058,7 +1122,7 @@ mod tests {
     fn get_current_period() {
         let context = get_context(false);
         testing_env!(context);
-        let contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        let contract = default_moloch();
         contract.get_current_period();
     }
 
@@ -1066,7 +1130,7 @@ mod tests {
     fn get_proposal_queue_length() {
         let context = get_context(false);
         testing_env!(context);
-        let contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        let contract = default_moloch();
         let period = contract.get_proposal_queue_length();
         assert_eq!(period, 0)
     }
@@ -1075,8 +1139,8 @@ mod tests {
     fn can_rage_quit() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-        contract.submit_proposal(robert(), 10, 10, "".to_string());
+        let mut contract = default_moloch();
+        contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
         let can = contract.can_rage_quit(0);
         assert_eq!(can, true)
     }
@@ -1085,7 +1149,17 @@ mod tests {
     fn has_voting_period_expired() {
         let context = get_context(false);
         testing_env!(context);
-        let contract = Moloch::new(robert(), fdai(), 10, 10, 10, 10, 100, 10, 10);
+        let contract = Moloch::new(
+            robert(),
+            fdai(),
+            10.into(),
+            10.into(),
+            10.into(),
+            10.into(),
+            100.into(),
+            10.into(),
+            10.into(),
+        );
         let expired = contract.has_voting_period_expired(0);
         assert_eq!(expired, false)
     }
