@@ -15,7 +15,8 @@ use crate::utils::init_moloch;
 //             15.into(),
 //             "A random proposal".to_string()
 //         ),
-//         deposit = 1
+//         1,
+//         near_sdk_sim::DEFAULT_GAS
 //     );
 //
 //     println!("{:?}", res.promise_results());

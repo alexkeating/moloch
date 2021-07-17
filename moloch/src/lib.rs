@@ -5,7 +5,7 @@ extern crate serde;
 use near_contract_standards::fungible_token::core_impl::ext_fungible_token;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::{UnorderedMap, Vector};
-use near_sdk::json_types::U128;
+use near_sdk::json_types::{U128, U64};
 use near_sdk::{env, near_bindgen, setup_alloc, AccountId, PanicOnDefault};
 
 use serde::Serialize;
@@ -18,8 +18,8 @@ mod guild_bank;
 
 // Implement Moloch Contract
 
-const MAX_VOTING_PERIOD_LENGTH: u128 = 10000000000000000000; // maximum length of voting period;
-const MAX_GRACE_PERIOD_LENGTH: u128 = 10000000000000000000; // maximum length of grace period
+const MAX_VOTING_PERIOD_LENGTH: u64 = 10000000000000000000; // maximum length of voting period;
+const MAX_GRACE_PERIOD_LENGTH: u64 = 10000000000000000000; // maximum length of grace period
 const MAX_DILUTION_BOUND: u128 = 10000000000000000000; // maximum dilution bound
 
 setup_alloc!();
@@ -27,21 +27,21 @@ setup_alloc!();
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Moloch {
     /// The length of period in non_leap nanoseconds
-    period_duration: u128,
+    period_duration: u64,
     /// The number of periods in to vote on a proposal
-    voting_period_length: u128,
+    voting_period_length: u64,
     /// The number of periods until a proposal is processed
-    grace_period_length: u128,
+    grace_period_length: u64,
     /// Deposit needed to submit a proposal to combat spam
     proposal_deposit: u128,
     /// Number of periods to abort submitted proposal
-    abort_window: u128,
+    abort_window: u64,
     /// Maximum multiplier a YES voter will be obligated to pay in case of mass ragequit
     dilution_bound: u128,
     /// Amount to give to whoever processes a proposal
     processing_reward: u128,
     /// time used to determine the current period
-    sumononing_time: u64,
+    summoning_time: u64,
     /// Approved token to use payment
     token_id: AccountId,
     /// Members in the DAO
@@ -81,7 +81,7 @@ pub struct Proposal {
     /// The number of shares the applicant is requesting
     shares_requested: u128,
     /// The period in which voting can start for this proposal
-    starting_period: u128,
+    starting_period: u64,
     /// The total number of yes votes for this proposal
     yes_votes: u128,
     /// The total number of no voters for this prososal
@@ -130,21 +130,21 @@ impl Moloch {
     pub fn new(
         summoner: AccountId,
         approved_token: AccountId,
-        period_duration: U128,
-        voting_period_length: U128,
-        grace_period_length: U128,
-        abort_window: U128,
+        period_duration: U64,
+        voting_period_length: U64,
+        grace_period_length: U64,
+        abort_window: U64,
         proposal_deposit: U128,
         dilution_bound: U128,
         processing_reward: U128,
     ) -> Self {
-        let _period_duration = u128::from(period_duration);
-        let _voting_period_length = u128::from(voting_period_length);
-        let _grace_period_length = u128::from(grace_period_length);
+        let _period_duration = u64::from(period_duration);
+        let _voting_period_length = u64::from(voting_period_length);
+        let _grace_period_length = u64::from(grace_period_length);
         let _proposal_deposit = u128::from(proposal_deposit);
         let _dilution_bound = u128::from(dilution_bound);
         let _processing_reward = u128::from(processing_reward);
-        let _abort_window = u128::from(abort_window);
+        let _abort_window = u64::from(abort_window);
 
         assert!(
             env::is_valid_account_id(summoner.as_bytes()),
@@ -216,7 +216,7 @@ impl Moloch {
             dilution_bound: _dilution_bound,
             processing_reward: _processing_reward,
             token_id: approved_token,
-            sumononing_time: env::block_timestamp(),
+            summoning_time: env::block_timestamp(),
             members: members,
             members_by_delegate_key: members_by_delegate_key,
             total_shares: 1,
@@ -342,20 +342,22 @@ impl Moloch {
     }
 
     #[payable]
-    pub fn send_applicant_tribute(&mut self, proposal_index: u64) {
+    pub fn send_applicant_tribute(&mut self, proposal_index: U64) {
+        let _proposal_index = u64::from(proposal_index);
         // Caller must be an active applicant
         // Get proposal and check that the account id matches the proposal applicant id
         //
         // If active applicant find proposal
-        let mut proposal = match self.proposal_queue.get(proposal_index) {
+        let mut proposal = match self.proposal_queue.get(_proposal_index) {
             Some(proposal) => proposal,
-            None => panic!("Proposal index does not exist in prooposal queue"),
+            None => panic!("Proposal index does not exist in proposal queue"),
         };
 
         let caller = env::predecessor_account_id();
+        println!("{}", caller);
         assert!(
             proposal.applicant == caller,
-            "Caller is not applicant of this proposal"
+            "Caller is not an applicant of this proposal"
         );
         assert!(proposal.aborted == false, "Proposal has been aborted");
         assert!(proposal.processed == false, "Proposal has been processed");
@@ -370,7 +372,8 @@ impl Moloch {
             prepaid_gas / 2,
         );
 
-        proposal.applicant_has_tributed = true
+        proposal.applicant_has_tributed = true;
+        self.proposal_queue.replace(_proposal_index, &proposal);
     }
 
     /// While a proposal is in its voting period, members can submit their vote using their
@@ -381,7 +384,7 @@ impl Moloch {
     /// 2. Based on the vote, adds the member's voting shares to the proposal yesVotes or noVote
     ///    tallies
     /// 3. If the member voted Yes and this is now the highest index proposal they voted yes on, it
-    ///    updates theif highest_index_yes_vote
+    ///    updates their highest_index_yes_vote
     /// 4. If the member voted Yes and this is now the most total shares that the Guild had during
     ///    any Yes vote, update the proposal max_total_shares_at_yes_vote.
     pub fn submit_vote(&mut self, proposal_index: u64, uint_vote: u8) {
@@ -396,7 +399,7 @@ impl Moloch {
         // 2. Check that proposal exists and fetch
         assert!(
             proposal_index < self.proposal_queue.len(),
-            "proposal does not exist",
+            "Proposal does not exist",
         );
         let mut proposal = match self.proposal_queue.get(proposal_index) {
             Some(proposal) => proposal,
@@ -413,7 +416,7 @@ impl Moloch {
         // 4. Add some voting period checks
         assert!(
             self.get_current_period() >= proposal.starting_period,
-            "Voting has not begun"
+            "Voting period has not begun"
         );
         assert!(
             !self.has_voting_period_expired(proposal.starting_period),
@@ -445,6 +448,8 @@ impl Moloch {
             }
             Vote::Null => {}
         }
+        // replace member
+        self.members.insert(&member_id, &member);
         self.proposal_queue.replace(proposal_index, &proposal);
         // 7. Log success
         env::log(
@@ -694,7 +699,7 @@ impl Moloch {
     /// To avoid a situation where an applicant does not send their tribute in a
     /// timely manner to the proposal the proposer can abort the proposal in order to not
     /// pay the processing reward
-    pub fn abort(&self, proposal_index: u64) {
+    pub fn abort(&mut self, proposal_index: u64) {
         // Check if proposal index is within the length
         assert!(
             proposal_index < self.proposal_queue.len(),
@@ -724,13 +729,15 @@ impl Moloch {
         // return deposit
         let prepaid_gas = env::prepaid_gas();
         ext_fungible_token::ft_transfer(
-            proposal.proposer,
+            proposal.proposer.to_string(),
             U128::from(self.proposal_deposit),
             Some("Return the submitted proposal deposit".to_string()),
             &self.token_id,
             0,
             prepaid_gas / 2,
         );
+
+        self.proposal_queue.replace(proposal_index, &proposal);
 
         // Log abort
         env::log(format!("Proposal was aborted by {}", env::predecessor_account_id(),).as_bytes());
@@ -796,9 +803,9 @@ impl Moloch {
 
     /// The difference between the block_timestamp and the summoning_time is used to figure out how
     /// many periods have elapsed and thus what the current period is.
-    pub fn get_current_period(&self) -> u128 {
-        let period_64 = env::block_timestamp().saturating_sub(self.sumononing_time);
-        u128::from(period_64).wrapping_div(self.period_duration)
+    pub fn get_current_period(&self) -> u64 {
+        let period_64 = env::block_timestamp().saturating_sub(self.summoning_time);
+        period_64.wrapping_div(self.period_duration)
     }
 
     /// Returns the length of the proposal queue
@@ -818,7 +825,7 @@ impl Moloch {
         };
     }
 
-    pub fn has_voting_period_expired(&self, starting_period: u128) -> bool {
+    pub fn has_voting_period_expired(&self, starting_period: u64) -> bool {
         return self.get_current_period()
             >= starting_period.saturating_add(self.voting_period_length);
     }
@@ -868,11 +875,239 @@ mod tests {
     use near_sdk::{testing_env, Balance, MockedBlockchain, VMContext};
     use std::convert::TryInto;
 
+    struct MockMember {
+        delegate_key: AccountId,
+        shares: u128,
+        exists: bool,
+        highest_index_yes_vote: u64,
+    }
+
+    impl MockMember {
+        fn new() -> Self {
+            MockMember {
+                delegate_key: robert(),
+                shares: 10,
+                exists: true,
+                highest_index_yes_vote: 0,
+            }
+        }
+
+        fn shares(&mut self, shares: u128) -> &mut Self {
+            self.shares = shares;
+            self
+        }
+
+        fn delegate_key(&mut self, delegate_key: AccountId) -> &mut Self {
+            self.delegate_key = delegate_key;
+            self
+        }
+
+        fn build(&self) -> Member {
+            Member {
+                delegate_key: self.delegate_key.to_string(),
+                shares: self.shares,
+                exists: true,
+                highest_index_yes_vote: self.highest_index_yes_vote,
+            }
+        }
+    }
+
+    // For better test isolation between function calls
+    // Create a Mock Propoposal
+    struct MockProposal {
+        /// The member who submitted the proposal
+        proposer: AccountId,
+        /// The applicant who wishes to become a member - this will be used for withdrawls
+        applicant: AccountId,
+        /// Whether the applicant has sent a proposals tribute
+        applicant_has_tributed: bool,
+        /// The number of shares the applicant is requesting
+        shares_requested: u128,
+        /// The period in which voting can start for this proposal
+        starting_period: u64,
+        /// The total number of yes votes for this proposal
+        yes_votes: u128,
+        /// The total number of no voters for this prososal
+        no_votes: u128,
+        /// true if the proposal has been processed
+        processed: bool,
+        /// true only if the proposal has passed
+        did_pass: bool,
+        /// true only if an applicant calls the "abort" function before the end of the voting period
+        aborted: bool,
+        /// Amount of tokens offered as tribute
+        token_tribute: u128,
+        /// The proposal details - could be an IPFS hash, plaintext, or JSON
+        details: String,
+        /// The maximum number of total shares encountered at a yes vote on this proposal
+        max_total_shares_at_yes_vote: u128,
+        /// Mapping of votes for each member
+        votes_by_member: HashMap<AccountId, Vote>,
+    }
+
+    impl MockProposal {
+        fn new() -> Self {
+            MockProposal {
+                proposer: bob(),
+                applicant: robert(),
+                shares_requested: 10,
+                starting_period: 1,
+                yes_votes: 0,
+                no_votes: 0,
+                processed: false,
+                did_pass: false,
+                aborted: false,
+                token_tribute: 12,
+                details: "".to_string(),
+                max_total_shares_at_yes_vote: 0,
+                votes_by_member: HashMap::new(),
+                applicant_has_tributed: false,
+            }
+        }
+
+        fn processed(&mut self, processed: bool) -> &mut Self {
+            self.processed = processed;
+            self
+        }
+
+        fn aborted(&mut self, aborted: bool) -> &mut Self {
+            self.aborted = aborted;
+            self
+        }
+
+        fn proposer(&mut self, proposer: AccountId) -> &mut Self {
+            self.proposer = proposer.to_string();
+            self
+        }
+
+        fn applicant(&mut self, applicant: AccountId) -> &mut Self {
+            self.applicant = applicant.to_string();
+            self
+        }
+
+        // Add to queue
+        // Update total_shares_requested
+        fn build(&self) -> Proposal {
+            let mut votes_by_member = HashMap::new();
+
+            for (key, val) in self.votes_by_member.iter() {
+                votes_by_member.insert(key.to_string(), *val);
+            }
+            Proposal {
+                proposer: self.proposer.to_string(),
+                applicant: self.applicant.to_string(),
+                shares_requested: self.shares_requested,
+                starting_period: self.starting_period,
+                yes_votes: self.yes_votes,
+                no_votes: self.no_votes,
+                processed: self.processed,
+                did_pass: self.did_pass,
+                aborted: self.aborted,
+                token_tribute: self.token_tribute,
+                details: self.details.to_string(),
+                max_total_shares_at_yes_vote: self.max_total_shares_at_yes_vote,
+                votes_by_member: votes_by_member,
+                applicant_has_tributed: self.applicant_has_tributed,
+            }
+        }
+    }
+
+    struct MockMoloch {
+        summoner: AccountId,
+        approved_token: AccountId,
+        period_duration: U64,
+        voting_period_length: U64,
+        grace_period_length: U64,
+        abort_window: U64,
+        proposal_deposit: U128,
+        dilution_bound: U128,
+        processing_reward: U128,
+        proposal_queue: Vector<Proposal>,
+        total_shares_requested: u128,
+        total_shares: u128,
+        members: UnorderedMap<AccountId, Member>,
+        members_by_delegate_key: UnorderedMap<AccountId, AccountId>,
+    }
+
+    impl MockMoloch {
+        fn new() -> Self {
+            MockMoloch {
+                summoner: bob(),
+                approved_token: fdai(),
+                // period_duration 30 seconds
+                period_duration: 10u64.pow(9).into(),
+                voting_period_length: 3.into(),
+                grace_period_length: 2.into(),
+                abort_window: 1.into(),
+                proposal_deposit: 100.into(),
+                dilution_bound: 10.into(),
+                processing_reward: 10.into(),
+                proposal_queue: Vector::new(b"proposal_queue".to_vec()),
+                total_shares_requested: 0,
+                total_shares: 0,
+                members: UnorderedMap::new(b"mock_members".to_vec()),
+                members_by_delegate_key: UnorderedMap::new(
+                    b"mock_members_by_delegate_key".to_vec(),
+                ),
+            }
+        }
+
+        fn summoner(&mut self, summoner: AccountId) -> &mut Self {
+            self.summoner = summoner;
+            self
+        }
+
+        fn add_proposal(&mut self, proposal: Proposal) -> &mut Self {
+            self.proposal_queue.push(&proposal);
+            self.total_shares_requested += proposal.shares_requested;
+            self
+        }
+
+        fn add_member(&mut self, member: Member) -> &mut Self {
+            self.members_by_delegate_key
+                .insert(&member.delegate_key, &member.delegate_key);
+            self.members.insert(&member.delegate_key, &member);
+            self.total_shares = member.shares;
+            self
+        }
+
+        fn build(&self) -> Moloch {
+            let mut moloch = Moloch::new(
+                self.summoner.to_string(),
+                self.approved_token.to_string(),
+                self.period_duration,
+                self.voting_period_length,
+                self.grace_period_length,
+                self.abort_window,
+                self.proposal_deposit,
+                self.dilution_bound,
+                self.processing_reward,
+            );
+            moloch.proposal_queue.extend(self.proposal_queue.iter());
+            moloch.total_shares_requested += self.total_shares_requested;
+            moloch.total_shares += self.total_shares;
+            moloch.members.extend(self.members.iter());
+            moloch
+                .members_by_delegate_key
+                .extend(self.members_by_delegate_key.iter());
+            moloch
+        }
+    }
+
+    // Create a Mock member
+
     fn get_context(is_view: bool) -> VMContext {
         VMContextBuilder::new()
             .signer_account_id(bob().try_into().unwrap())
             .is_view(is_view)
             .build()
+    }
+
+    fn get_context_builder(is_view: bool) -> VMContextBuilder {
+        VMContextBuilder::new()
+            .signer_account_id(bob().try_into().unwrap())
+            .is_view(is_view)
+            .clone()
     }
 
     fn bob() -> AccountId {
@@ -882,22 +1117,13 @@ mod tests {
     fn robert() -> AccountId {
         "robert.testnet".to_string()
     }
-    fn fdai() -> AccountId {
-        "fdai.testnet".to_string()
+
+    fn alice() -> AccountId {
+        "alice.testnet".to_string()
     }
 
-    fn default_moloch() -> Moloch {
-        Moloch::new(
-            bob(),
-            fdai(),
-            10.into(),
-            10.into(),
-            10.into(),
-            10.into(),
-            100.into(),
-            10.into(),
-            10.into(),
-        )
+    fn fdai() -> AccountId {
+        "fdai.testnet".to_string()
     }
 
     /// Tests for submit propposal
@@ -905,7 +1131,7 @@ mod tests {
     fn submit_proposal() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = default_moloch();
+        let mut contract = MockMoloch::new().build();
         contract.submit_proposal(robert(), 12.into(), 10.into(), "".to_string());
 
         let proposal = contract.proposal_queue.get(0);
@@ -940,7 +1166,7 @@ mod tests {
     fn submit_proposal_multiple_proposals() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = default_moloch();
+        let mut contract = MockMoloch::new().build();
         contract.submit_proposal(robert(), 12.into(), 10.into(), "".to_string());
 
         let context = get_context(false);
@@ -974,7 +1200,7 @@ mod tests {
     fn submit_proposal_invalid_account() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = default_moloch();
+        let mut contract = MockMoloch::new().build();
         contract.submit_proposal("".to_string(), 10.into(), 10.into(), "".to_string());
     }
 
@@ -983,7 +1209,7 @@ mod tests {
     fn submit_proposal_shares_requested_overflow() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = default_moloch();
+        let mut contract = MockMoloch::new().build();
         contract.submit_proposal(robert(), 10.into(), u128::MAX.into(), "".to_string());
     }
 
@@ -994,7 +1220,7 @@ mod tests {
     fn submit_proposal_total_shares_requested_overflow() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = default_moloch();
+        let mut contract = MockMoloch::new().build();
         contract.submit_proposal(
             robert(),
             10.into(),
@@ -1009,35 +1235,297 @@ mod tests {
     fn submit_proposal_not_delegate() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = Moloch::new(
-            robert(),
-            fdai(),
-            10.into(),
-            10.into(),
-            10.into(),
-            10.into(),
-            100.into(),
-            10.into(),
-            10.into(),
-        );
+        let mut contract = MockMoloch::new().summoner(robert()).build();
         contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
     }
 
-    // Voting has not begun yet
-    // #[test]
-    // fn submit_vote() {
-    //     let context = get_context(false);
-    //     testing_env!(context);
-    //     let mut contract =
-    //         Moloch::new(bob(), fdai(), 10000000000000000000, 10, 10, 10, 100, 10, 10);
-    //     contract.submit_proposal(robert(), 10, 10, "".to_string());
-    //     contract.submit_vote(0, 1);
-    // }
+    #[test]
+    fn send_applicant_tribute() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.applicant_has_tributed, false);
+
+        let context_robert = get_context_builder(false)
+            .predecessor_account_id(proposal.applicant.try_into().unwrap())
+            .build();
+
+        testing_env!(context_robert);
+        contract.send_applicant_tribute(0.into());
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.applicant_has_tributed, true)
+    }
+
+    // Proposal does not exist at index
+    #[test]
+    #[should_panic(expected = r#"Proposal index does not exist in proposal queue"#)]
+    fn send_applicant_tribute_no_proposal() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+
+        let context = get_context(false);
+        testing_env!(context);
+        contract.send_applicant_tribute(5.into());
+    }
+    // Caller is not the applicant
+    #[test]
+    #[should_panic(expected = r#"Caller is not an applicant of this proposal"#)]
+    fn send_applicant_tribute_caller_not_applicant() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new()
+            .aborted(true)
+            .applicant(robert())
+            .build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        // contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
+
+        let context = get_context(false);
+        testing_env!(context);
+        contract.send_applicant_tribute(0.into());
+    }
+
+    // Proposal has already been aborted
+    #[test]
+    #[should_panic(expected = r#"Proposal has been aborted"#)]
+    fn send_applicant_tribute_proposal_has_been_aborted() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().aborted(true).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        let context = get_context_builder(false)
+            .predecessor_account_id(proposal.applicant.try_into().unwrap())
+            .build();
+        testing_env!(context);
+        contract.send_applicant_tribute(0.into());
+    }
+
+    // Proposal has already been processed
+    #[test]
+    #[should_panic(expected = r#"Proposal has been processed"#)]
+    fn send_applicant_tribute_proposal_has_been_processed() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new()
+            .processed(true)
+            .proposer(robert())
+            .applicant(bob())
+            .build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+
+        let context = get_context(false);
+        testing_env!(context);
+        contract.send_applicant_tribute(0.into());
+    }
+
+    // Single vote
+    #[test]
+    fn submit_vote_yes() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+
+        let mut context_builder = get_context_builder(false);
+        let context = context_builder
+            .block_timestamp((contract.summoning_time + contract.period_duration).into())
+            .build();
+        testing_env!(context);
+        contract.submit_vote(0, 1);
+
+        // Assert that the correct proposal was voted on
+        // and that it was marked as a yes
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.yes_votes, 1);
+        assert_eq!(proposal.no_votes, 0);
+        assert_eq!(proposal.max_total_shares_at_yes_vote, 1);
+        let member = contract.members.get(&bob()).unwrap();
+        assert_eq!(member.highest_index_yes_vote, 0);
+    }
 
     // TODO: add these and for successful have better asserts
+    // Multiple yes and no votes, do in integration/ end to end tests
+    // No vote
+    #[test]
+    fn submit_vote_no() {
+        // Setup
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+
+        let mut context_builder = get_context_builder(false);
+        let context = context_builder
+            .block_timestamp((contract.summoning_time + contract.period_duration).into())
+            .build();
+
+        testing_env!(context);
+        contract.submit_vote(0, 2);
+
+        // Assert that the correct proposal was voted on
+        // and that it was marked as a yes
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.yes_votes, 0);
+        assert_eq!(proposal.no_votes, 1);
+        let member = contract.members.get(&bob()).unwrap();
+        assert_eq!(member.highest_index_yes_vote, 0);
+    }
+
+    // Two proposals
+    // 3 users
+    // multiple votes yes and not
+    #[test]
+    fn submit_vote_complex() {
+        // Setup the test contract
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal_one = MockProposal::new().build();
+        let proposal_two = MockProposal::new().build();
+        let robert = MockMember::new().delegate_key(robert()).shares(30).build();
+        let alice = MockMember::new().delegate_key(alice()).shares(50).build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal_one)
+            .add_proposal(proposal_two)
+            .add_member(robert)
+            .add_member(alice)
+            .build();
+
+        // Make sure two periods pass so each proposal can
+        // be voted on
+        let mut context_builder = get_context_builder(false);
+        let context_block_timestamp = context_builder
+            .block_timestamp((contract.summoning_time + contract.period_duration * 2).into());
+        testing_env!(context_block_timestamp.build());
+
+        contract.submit_vote(0, 1);
+        testing_env!(context_block_timestamp.build());
+        contract.submit_vote(1, 1);
+        let member = contract.members.get(&bob()).unwrap();
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(
+            member.highest_index_yes_vote, 1,
+            "Highest proposal index is wrong"
+        );
+        assert_eq!(
+            proposal.max_total_shares_at_yes_vote, 51,
+            "Max number of total shares is wrong"
+        );
+        // Add a some votes from the other members
+    }
+
+    // Proposal does not exist
+    #[test]
+    #[should_panic(expected = r#"Proposal does not exist"#)]
+    fn submit_vote_no_existing_proposal() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+        contract.submit_vote(0, 1)
+    }
+
+    #[test]
+    #[should_panic(expected = r#"uint vote must be less than 3, 1 is yes 2 is no"#)]
+    pub fn submit_vote_undefined_vote() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        contract.submit_vote(0, 3)
+    }
+
     // voting has not begun
+    #[test]
+    #[should_panic(expected = r#"Voting period has not begun"#)]
+    pub fn submit_vote_has_not_begun() {
+        let context = get_context(false);
+        testing_env!(context);
+
+        let proposal = MockProposal::new().build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        contract.submit_vote(0, 2)
+    }
+
     // voting has expired
+    #[test]
+    #[should_panic(expected = r#"Proposal voting period has expired"#)]
+    pub fn submit_vote_expired() {
+        let context = get_context(false);
+        testing_env!(context);
+
+        let mut context_builder = get_context_builder(false);
+        let proposal = MockProposal::new().build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let block_time = contract.summoning_time
+            + (contract.period_duration * (contract.voting_period_length + 1));
+        let context = context_builder.block_timestamp(block_time.into()).build();
+        testing_env!(context);
+
+        contract.submit_vote(0, 2)
+    }
+
     // member has already voted
+    #[test]
+    #[should_panic(expected = r#"Member has already voted"#)]
+    pub fn submit_vote_member_already_voted() {
+        let context = get_context(false);
+        testing_env!(context);
+
+        let mut context_builder = get_context_builder(false);
+        let proposal = MockProposal::new().build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let block_time = contract.summoning_time + contract.period_duration;
+        let context = context_builder.block_timestamp(block_time.into()).build();
+        testing_env!(context);
+
+        contract.submit_vote(0, 2);
+        contract.submit_vote(0, 1);
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.no_votes, 1)
+    }
+
+    // proposal has been aborted
+    #[test]
+    #[should_panic(expected = r#"Proposal has been aborted"#)]
+    pub fn submit_vote_proposal_aborted() {
+        let context = get_context(false);
+        testing_env!(context);
+
+        let mut context_builder = get_context_builder(false);
+
+        let proposal = MockProposal::new().aborted(true).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let block_time = contract.summoning_time + contract.period_duration;
+        let context = context_builder.block_timestamp(block_time.into()).build();
+        testing_env!(context);
+        contract.submit_vote(0, 2);
+    }
+
+    // Member not delegate
+    #[test]
+    #[should_panic(expected = r#"Account is not a delegate"#)]
+    pub fn submit_vote_member_not_delegate() {
+        let context = get_context(false);
+        testing_env!(context);
+
+        let mut context_builder = get_context_builder(false);
+
+        let proposal = MockProposal::new().aborted(true).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let block_time = contract.summoning_time + contract.period_duration;
+        let context = context_builder
+            .block_timestamp(block_time.into())
+            .predecessor_account_id(alice().try_into().unwrap())
+            .build();
+        testing_env!(context);
+        contract.submit_vote(0, 2);
+    }
 
     // #[test]
     // fn process_proposal() {
@@ -1092,7 +1580,7 @@ mod tests {
     fn rage_quit() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = default_moloch();
+        let mut contract = MockMoloch::new().build();
         contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
         contract.rage_quit(0);
     }
@@ -1113,7 +1601,7 @@ mod tests {
     fn update_delegate_key() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = default_moloch();
+        let mut contract = MockMoloch::new().build();
         contract.update_delegate_key("soda".to_string());
     }
 
@@ -1122,7 +1610,7 @@ mod tests {
     fn get_current_period() {
         let context = get_context(false);
         testing_env!(context);
-        let contract = default_moloch();
+        let contract = MockMoloch::new().build();
         contract.get_current_period();
     }
 
@@ -1130,7 +1618,7 @@ mod tests {
     fn get_proposal_queue_length() {
         let context = get_context(false);
         testing_env!(context);
-        let contract = default_moloch();
+        let contract = MockMoloch::new().build();
         let period = contract.get_proposal_queue_length();
         assert_eq!(period, 0)
     }
@@ -1139,7 +1627,7 @@ mod tests {
     fn can_rage_quit() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = default_moloch();
+        let mut contract = MockMoloch::new().build();
         contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
         let can = contract.can_rage_quit(0);
         assert_eq!(can, true)
