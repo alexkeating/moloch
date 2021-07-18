@@ -1067,7 +1067,7 @@ mod tests {
             self.members_by_delegate_key
                 .insert(&member.delegate_key, &member.delegate_key);
             self.members.insert(&member.delegate_key, &member);
-            self.total_shares = member.shares;
+            self.total_shares += member.shares;
             self
         }
 
@@ -1388,13 +1388,13 @@ mod tests {
         testing_env!(context);
         let proposal_one = MockProposal::new().build();
         let proposal_two = MockProposal::new().build();
-        let robert = MockMember::new().delegate_key(robert()).shares(30).build();
-        let alice = MockMember::new().delegate_key(alice()).shares(50).build();
+        let robert_member_info = MockMember::new().delegate_key(robert()).shares(30).build();
+        let alice_member_info = MockMember::new().delegate_key(alice()).shares(50).build();
         let mut contract = MockMoloch::new()
             .add_proposal(proposal_one)
             .add_proposal(proposal_two)
-            .add_member(robert)
-            .add_member(alice)
+            .add_member(robert_member_info)
+            .add_member(alice_member_info)
             .build();
 
         // Make sure two periods pass so each proposal can
@@ -1404,6 +1404,7 @@ mod tests {
             .block_timestamp((contract.summoning_time + contract.period_duration * 2).into());
         testing_env!(context_block_timestamp.build());
 
+        // Actions by bob
         contract.submit_vote(0, 1);
         testing_env!(context_block_timestamp.build());
         contract.submit_vote(1, 1);
@@ -1414,10 +1415,49 @@ mod tests {
             "Highest proposal index is wrong"
         );
         assert_eq!(
-            proposal.max_total_shares_at_yes_vote, 51,
+            proposal.max_total_shares_at_yes_vote, 81,
             "Max number of total shares is wrong"
         );
-        // Add a some votes from the other members
+
+        // Roberts actions
+        testing_env!(context_block_timestamp
+            .predecessor_account_id(robert().try_into().unwrap())
+            .build());
+
+        contract.submit_vote(0, 1);
+        testing_env!(context_block_timestamp.build());
+        contract.submit_vote(1, 2);
+        let member = contract.members.get(&robert()).unwrap();
+        assert_eq!(
+            member.highest_index_yes_vote, 0,
+            "Highest proposal index is wrong for robert"
+        );
+
+        // Alices actions
+        testing_env!(context_block_timestamp
+            .predecessor_account_id(alice().try_into().unwrap())
+            .build());
+
+        contract.submit_vote(0, 1);
+        testing_env!(context_block_timestamp.build());
+        contract.submit_vote(1, 1);
+        let member = contract.members.get(&alice()).unwrap();
+        assert_eq!(
+            member.highest_index_yes_vote, 1,
+            "Highest proposal index is wrong for alice"
+        );
+
+        let proposal_zero = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal_zero.yes_votes, 81);
+        assert_eq!(proposal_zero.no_votes, 0);
+        assert_eq!(proposal_zero.processed, false);
+        assert_eq!(proposal_zero.aborted, false);
+
+        let proposal_one = contract.proposal_queue.get(1).unwrap();
+        assert_eq!(proposal_one.yes_votes, 51);
+        assert_eq!(proposal_one.no_votes, 30);
+        assert_eq!(proposal_one.processed, false);
+        assert_eq!(proposal_one.aborted, false);
     }
 
     // Proposal does not exist
