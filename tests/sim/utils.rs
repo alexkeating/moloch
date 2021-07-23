@@ -33,6 +33,7 @@ pub fn init_moloch() -> (
     ContractAccount<FdaiContract>,
     UserAccount,
     UserAccount,
+    u128,
 ) {
     let root = init_simulator(None);
 
@@ -50,6 +51,8 @@ pub fn init_moloch() -> (
     register_user(&bob);
     register_user(&root);
 
+    let deposit_amount = to_yocto("2");
+
     println!("Account Id");
     println!("{:?}", fdai.user_account.account_id.to_string());
     let moloch = deploy!(
@@ -61,11 +64,11 @@ pub fn init_moloch() -> (
             bob.valid_account_id().to_string(),
             fdai.user_account.account_id.to_string(),
             // nanoseconds
-             10u128.pow(9).into(),
-             3u128.into(),
-             1u128.into(),
-             2u128.into(),
-             10u128.into(),
+             10u64.pow(9).into(),
+             3u64.into(),
+             1u64.into(),
+             2u64.into(),
+             deposit_amount.into(),
              2u128.into(),
              1u128.into()
              )
@@ -87,16 +90,5 @@ pub fn init_moloch() -> (
     )
     .assert_success();
 
-    call!(
-        root,
-        fdai.ft_transfer(
-            moloch.user_account.valid_account_id(),
-            to_yocto("100").into(),
-            None
-        ),
-        deposit = 1
-    )
-    .assert_success();
-
-    (root, moloch, fdai, alice, bob)
+    (root, moloch, fdai, alice, bob, deposit_amount)
 }
