@@ -3,7 +3,7 @@ extern crate near_sdk;
 use near_contract_standards::fungible_token::core_impl::ext_fungible_token;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::U128;
-use near_sdk::{env, near_bindgen, AccountId, PanicOnDefault};
+use near_sdk::{env, near_bindgen, AccountId, PanicOnDefault, Promise};
 
 // Guild bank
 #[near_bindgen]
@@ -21,7 +21,7 @@ impl GuildBank {
         }
     }
 
-    pub fn withdraw(&self, receiver: AccountId, shares: u128, total_shares: u128) {
+    pub fn withdraw(&self, receiver: AccountId, shares: u128, total_shares: u128) -> Promise {
         let amount = match self
             .balance
             .saturating_mul(shares)
@@ -38,8 +38,9 @@ impl GuildBank {
             Some("Withdrawl from guild bank".to_string()),
             &self.token_id,
             0,
+            // Change to a fixed gas amount
             prepaid_gas / 2,
-        );
+        )
     }
 
     pub fn deposit(&mut self, amount: u128) -> u128 {

@@ -648,11 +648,13 @@ impl Moloch {
     /// 2. Reduce the total shares by the shares_to_burn
     /// 3. Instruct the guild bank to send the member their proportional amount of the approved
     ///    token
-    pub fn rage_quit(&mut self, shares_to_burn: u128) {
+    pub fn rage_quit(&mut self, shares_to_burn: u128) -> Promise {
         // only_member modifier
         self.only_member();
         // Check insuffcient shares
-        let mut member = self.members.get(&env::predecessor_account_id()).unwrap();
+        let predecessor_account_id = env::predecessor_account_id();
+        let mut member = self.members.get(&predecessor_account_id).unwrap();
+        let initial_total_shares = self.total_shares;
 
         assert!(
             member.shares >= shares_to_burn,
@@ -662,12 +664,13 @@ impl Moloch {
         let can_rage_quit = self.can_rage_quit(member.highest_index_yes_vote);
         assert!(
             can_rage_quit,
-            "Can't rage quit until highest index proposal member voted YES is processed",
+            "Can't rage quit until the highest index proposal member voted YES is processed",
         );
         // Burn shares
         member.shares = member.shares.saturating_sub(shares_to_burn);
         self.total_shares = self.total_shares.saturating_sub(shares_to_burn);
-        // TODO: withdraw shares to burn
+        self.members.insert(&predecessor_account_id, &member);
+
         // log rage_quit
         env::log(
             format!(
@@ -677,12 +680,13 @@ impl Moloch {
             )
             .as_bytes(),
         );
+
+        // TODO: Does the above get rolled back if this fails
+        self.bank
+            .withdraw(predecessor_account_id, shares_to_burn, initial_total_shares)
     }
 
-    /// To avoid a situation where an applicant does not send their tribute in a
-    /// timely manner to the proposal the proposer can abort the proposal in order to not
-    /// pay the processing reward
-    /// TODO: this will need to change
+    /// TODO: Add documentation
     pub fn abort(&mut self, proposal_index: u64) {
         // Check if proposal index is within the length
         assert!(
@@ -693,12 +697,8 @@ impl Moloch {
         let mut proposal = self.proposal_queue.get(proposal_index).unwrap();
         // Check sender is the applicant
         assert!(
-            env::predecessor_account_id() == proposal.proposer,
-            "Calling account is not the proposal proposer"
-        );
-        assert!(
-            proposal.applicant_has_tributed == false,
-            "Proposal already has tribute"
+            env::predecessor_account_id() == proposal.applicant,
+            "Calling account is not the proposal applicant"
         );
 
         // Check if abort window has passed
@@ -709,6 +709,12 @@ impl Moloch {
         assert!(!proposal.aborted, "Proposal has already been aborted");
         // Reset proposal params for abort
         proposal.aborted = true;
+        proposal.token_tribute = 0;
+
+        self.proposal_queue.replace(proposal_index, &proposal);
+
+        // Log abort
+        env::log(format!("Proposal was aborted by {}", env::predecessor_account_id(),).as_bytes());
 
         // return deposit
         let prepaid_gas = env::prepaid_gas();
@@ -720,11 +726,6 @@ impl Moloch {
             0,
             prepaid_gas / 2,
         );
-
-        self.proposal_queue.replace(proposal_index, &proposal);
-
-        // Log abort
-        env::log(format!("Proposal was aborted by {}", env::predecessor_account_id(),).as_bytes());
     }
 
     /// By default when a member is accepted their delegateKey is set to their member accountId. At
@@ -749,7 +750,10 @@ impl Moloch {
                 Some(member) => member,
                 None => Member::default(),
             };
-            assert!(!member.exists, "Can't overwrite an exiting member");
+            assert!(
+                !member.exists,
+                "Can't overwrite an existing members delegate_key"
+            );
             let delegate_key = match self.members_by_delegate_key.get(&new_delegate_key) {
                 Some(delegate_key) => delegate_key,
                 None => "".to_string(),
@@ -773,6 +777,7 @@ impl Moloch {
             .insert(&new_delegate_key, &sender);
         // update delegate key on memeber
         member.delegate_key = new_delegate_key;
+        self.members.insert(&env::predecessor_account_id(), &member);
         // Log delegate key
         env::log(
             format!(
@@ -804,7 +809,7 @@ impl Moloch {
             "Proposal does not exist"
         );
         return match self.proposal_queue.get(highest_index_yes_vote) {
-            Some(_) => true,
+            Some(proposal) => proposal.processed,
             None => false,
         };
     }
@@ -820,7 +825,10 @@ impl Moloch {
             None => Member::default(),
         };
         assert!(member.exists, "Member does not exist");
-        assert!(proposal_index < self.proposal_queue.len());
+        assert!(
+            proposal_index < self.proposal_queue.len(),
+            "Proposal does not exist"
+        );
         let proposal = self.proposal_queue.get(proposal_index).unwrap();
         return match proposal.votes_by_member.get(&member_id) {
             Some(vote) => *vote,
@@ -828,7 +836,7 @@ impl Moloch {
         };
     }
 
-    /// Checks that previous caller is the delegateKey of a
+    /// Checks that previous caller is the delegate key of a
     /// member with at least 1 share
     fn only_delegate(&self) {
         let delegate_key = match self
@@ -885,6 +893,11 @@ mod tests {
 
         fn delegate_key(&mut self, delegate_key: AccountId) -> &mut Self {
             self.delegate_key = delegate_key;
+            self
+        }
+
+        fn highest_index_yes_vote(&mut self, highest_index_yes_vote: u64) -> &mut Self {
+            self.highest_index_yes_vote = highest_index_yes_vote;
             self
         }
 
@@ -1931,34 +1944,260 @@ mod tests {
     }
 
     #[test]
-    fn rage_quit() {
+    fn rage_quit_basic() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = MockMoloch::new()
-            .add_escrow_deposit(bob(), 100)
-            .add_escrow_deposit(robert(), 10)
+        let robert_member_info = MockMember::new()
+            .delegate_key(robert())
+            .highest_index_yes_vote(0)
+            .shares(30)
             .build();
-        contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
-        contract.rage_quit(0);
+        let proposal = MockProposal::new().processed(true).build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .add_member(robert_member_info)
+            .build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .build());
+
+        contract.rage_quit(30);
+        assert_eq!(
+            contract.total_shares, 1,
+            "Total shares have not properly been subtracted"
+        );
+        let member = contract.members.get(&robert()).unwrap();
+        assert_eq!(
+            member.shares, 0,
+            "Shares have not been properly subtracted by a memeber"
+        );
+    }
+    #[test]
+    fn rage_quit_partial() {
+        let context = get_context(false);
+        testing_env!(context);
+        let robert_member_info = MockMember::new()
+            .delegate_key(robert())
+            .highest_index_yes_vote(0)
+            .shares(30)
+            .build();
+        let proposal = MockProposal::new().processed(true).build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .add_member(robert_member_info)
+            .build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .build());
+
+        contract.rage_quit(20);
+        assert_eq!(
+            contract.total_shares, 11,
+            "Total shares have not properly been subtracted"
+        );
+        let member = contract.members.get(&robert()).unwrap();
+        assert_eq!(
+            member.shares, 10,
+            "Shares have not been properly subtracted by a memeber"
+        );
     }
 
-    // TODO: Figure out how to Mock the moloch
-    // to avoid abort window length issues
-    // #[test]
-    // #[should_panic(expected = r#"Abort window has passed!"#)]
-    // fn abort() {
-    //     let context = get_context(false);
-    //     testing_env!(context);
-    //     let mut contract = Moloch::new(bob(), fdai(), 10, 10, 10, 10, 100, 10, 10);
-    //     contract.submit_proposal(bob(), 10, 10, "".to_string());
-    //     contract.abort(0);
-    // }
+    // Highest proposal has not been indexed
+    #[test]
+    #[should_panic(
+        expected = r#"Can't rage quit until the highest index proposal member voted YES is processed"#
+    )]
+    fn rage_quit_cant() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().build();
+        let member = MockMember::new().delegate_key(robert()).shares(30).build();
+        let mut contract = MockMoloch::new()
+            .add_member(member)
+            .add_proposal(proposal)
+            .build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .build());
+
+        contract.rage_quit(20);
+    }
+
+    // Not a member
+    #[test]
+    #[should_panic(expected = r#"Account is not a member"#)]
+    fn rage_quit_not_a_member() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .build());
+
+        contract.rage_quit(20);
+    }
+
+    // Simple abort
+    #[test]
+    fn abort() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().applicant(robert()).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .block_timestamp(contract.summoning_time + contract.period_duration)
+            .build());
+        contract.abort(0);
+
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.aborted, true);
+        assert_eq!(proposal.token_tribute, 0);
+    }
+
+    // Proposal does not exist
+    #[test]
+    #[should_panic(expected = r#"Proposal does not exist"#)]
+    fn abort_proposal_does_not_exist() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .block_timestamp(contract.summoning_time + contract.period_duration)
+            .build());
+        contract.abort(0);
+    }
+
+    // Caller is not applicant
+    #[test]
+    #[should_panic(expected = r#"Calling account is not the proposal applicant"#)]
+    fn abort_proposal_calling_account_is_not_applicant() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().applicant(robert()).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .block_timestamp(contract.summoning_time + contract.period_duration)
+            .build());
+        contract.abort(0);
+    }
+
+    // Abort window has passed
+    #[test]
+    #[should_panic(expected = r#"Abort window has passed!"#)]
+    fn abort_proposal_abort_window_has_passed() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new().applicant(robert()).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .block_timestamp(contract.summoning_time + contract.period_duration * 5)
+            .build());
+        contract.abort(0);
+    }
+
+    // Proposal has already been aborted
+    #[test]
+    #[should_panic(expected = r#"Proposal has already been aborted"#)]
+    fn abort_proposal_proposal_has_already_been_aborted() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal = MockProposal::new()
+            .applicant(robert())
+            .aborted(true)
+            .build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .block_timestamp(contract.summoning_time + contract.period_duration)
+            .build());
+        contract.abort(0);
+    }
 
     #[test]
     fn update_delegate_key() {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = MockMoloch::new().build();
+        contract.update_delegate_key("soda".to_string());
+        let old_key = contract.members_by_delegate_key.get(&bob()).unwrap();
+        assert_eq!(
+            old_key,
+            "".to_string(),
+            "Old has not been updated to an empty string"
+        );
+        let new_key = contract
+            .members_by_delegate_key
+            .get(&"soda".to_string())
+            .unwrap();
+        assert_eq!(new_key, bob().to_string(), "New key has been created");
+        let member = contract.members.get(&bob()).unwrap();
+        assert_eq!(
+            member.delegate_key,
+            "soda".to_string(),
+            "Member delegate key has not been updated"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Account is not a member"#)]
+    fn update_delegate_key_only_member() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .build());
+        contract.update_delegate_key("soda".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Delegate key cannot be an empty string"#)]
+    fn update_delegate_key_empty_string() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+        let mut context_builder = get_context_builder(false);
+        contract.update_delegate_key("".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Can't overwrite an existing members delegate_key"#)]
+    fn update_delegate_cannot_be_an_existing_member() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().build();
+        let mut contract = MockMoloch::new().add_member(member).build();
+        let mut context_builder = get_context_builder(false);
+        contract.update_delegate_key(robert().to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Can't overwrite existing delegate keys"#)]
+    fn update_delegate_cannot_be_an_existing_member_from_delegate_key() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().build();
+        let mut contract = MockMoloch::new().add_member(member).build();
+        let mut context_builder = get_context_builder(false);
+        contract.update_delegate_key("soda".to_string());
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .build());
         contract.update_delegate_key("soda".to_string());
     }
 
@@ -1968,7 +2207,21 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let contract = MockMoloch::new().build();
-        contract.get_current_period();
+        let period = contract.get_current_period();
+        assert_eq!(period, 0, "Current period is not 0")
+    }
+
+    #[test]
+    fn get_current_period_after_three_periods() {
+        let context = get_context(false);
+        testing_env!(context);
+        let contract = MockMoloch::new().build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .block_timestamp(contract.summoning_time + contract.period_duration * 3)
+            .build());
+        let period = contract.get_current_period();
+        assert_eq!(period, 3, "Current period is not 3")
     }
 
     #[test]
@@ -1981,46 +2234,157 @@ mod tests {
     }
 
     #[test]
+    fn get_proposal_queue_length_two() {
+        let context = get_context(false);
+        testing_env!(context);
+        let proposal_one = MockProposal::new().build();
+        let proposal_two = MockProposal::new().build();
+        let contract = MockMoloch::new()
+            .add_proposal(proposal_one)
+            .add_proposal(proposal_two)
+            .build();
+        let period = contract.get_proposal_queue_length();
+        assert_eq!(period, 2)
+    }
+
+    #[test]
     fn can_rage_quit() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = MockMoloch::new()
-            .add_escrow_deposit(bob(), 100)
-            .add_escrow_deposit(robert(), 10)
-            .build();
-        contract.submit_proposal(robert(), 10.into(), 10.into(), "".to_string());
+        let proposal = MockProposal::new().processed(true).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
         let can = contract.can_rage_quit(0);
         assert_eq!(can, true)
     }
 
     #[test]
-    fn has_voting_period_expired() {
+    fn can_rage_quit_false() {
         let context = get_context(false);
         testing_env!(context);
-        let contract = Moloch::new(
-            robert(),
-            fdai(),
-            10.into(),
-            10.into(),
-            10.into(),
-            10.into(),
-            100.into(),
-            10.into(),
-            10.into(),
-        );
-        let expired = contract.has_voting_period_expired(0);
-        assert_eq!(expired, false)
+        let proposal = MockProposal::new().processed(false).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let can = contract.can_rage_quit(0);
+        assert_eq!(can, false)
     }
 
-    // Testing time manipulation
-    // #[test]
-    // fn get_member_proposal_vote() {
-    //     let context = get_context(false);
-    //     testing_env!(context);
-    //     let mut contract = Moloch::new(bob(), fdai(), 10, 1000000000000000000, 10, 10, 100, 10, 10);
-    //     contract.submit_proposal(bob(), 10, 10, "".to_string());
-    //     contract.submit_vote(0, 1);
-    //     let vote = contract.get_member_proposal_vote(bob(), 1);
-    //     assert_eq!(vote, Vote::Yes)
-    // }
+    #[test]
+    #[should_panic(expected = r#"Proposal does not exist"#)]
+    fn can_rage_quit_proposal_does_not_exist() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+        let can = contract.can_rage_quit(0);
+    }
+
+    #[test]
+    fn has_voting_period_expired_no() {
+        let context = get_context(false);
+        testing_env!(context);
+        let contract = MockMoloch::new().build();
+        let expired = contract.has_voting_period_expired(0);
+        assert_eq!(expired, false, "The voting period has expired")
+    }
+
+    #[test]
+    fn has_voting_period_expired_yes() {
+        let context = get_context(false);
+        testing_env!(context);
+        let contract = MockMoloch::new().build();
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .block_timestamp(
+                contract.summoning_time + contract.period_duration * contract.voting_period_length
+            )
+            .build());
+        let expired = contract.has_voting_period_expired(0);
+        assert_eq!(expired, true, "The voting period has not expired")
+    }
+
+    #[test]
+    fn get_member_proposal_vote_yes() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().delegate_key(bob()).build();
+        let proposal = MockProposal::new().yes_vote(&member).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let vote = contract.get_member_proposal_vote(bob(), 0);
+        assert_eq!(vote, Vote::Yes, "Bob did not vote yes")
+    }
+
+    #[test]
+    fn get_member_proposal_vote_null() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().build();
+        let proposal = MockProposal::new().yes_vote(&member).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let vote = contract.get_member_proposal_vote(bob(), 0);
+        assert_eq!(vote, Vote::Null, "Bob has not voted yes yet")
+    }
+
+    // Member does not exist
+    #[test]
+    #[should_panic(expected = r#"Member does not exist"#)]
+    fn get_member_proposal_vote_member_does_not_exist() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().build();
+        let proposal = MockProposal::new().yes_vote(&member).build();
+        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let vote = contract.get_member_proposal_vote(robert(), 0);
+    }
+
+    // Proposal does not exist
+    #[test]
+    #[should_panic(expected = r#"Proposal does not exist"#)]
+    fn get_member_proposal_vote_proposal_does_not_exist() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+        let vote = contract.get_member_proposal_vote(bob(), 0);
+    }
+
+    #[test]
+    fn only_delegate() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+        contract.only_delegate()
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Account is not a delegate"#)]
+    fn only_delegate_not() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+
+        let mut context = get_context_builder(false);
+        testing_env!(context
+            .predecessor_account_id(robert().try_into().unwrap())
+            .build());
+        contract.only_delegate()
+    }
+
+    #[test]
+    fn only_member() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+        contract.only_member()
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Account is not a member"#)]
+    fn only_member_not() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder
+            .predecessor_account_id(robert().try_into().unwrap())
+            .build());
+        contract.only_member()
+    }
 }
