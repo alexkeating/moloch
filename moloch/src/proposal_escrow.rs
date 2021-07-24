@@ -44,6 +44,13 @@ impl ProposalEscrow {
         self.user_balances.insert(&account_id, &updated_balance);
         updated_balance
     }
+
+    pub fn user_balance(&self, account_id: AccountId) -> u128 {
+        return match self.user_balances.get(&account_id) {
+            Some(balance) => balance,
+            None => 0,
+        };
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

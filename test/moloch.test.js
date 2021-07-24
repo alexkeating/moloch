@@ -8,6 +8,77 @@ const {
 require("dotenv").config();
 
 
+const registerFdai = async (masterAccount, accountId, ftAccountId) => {
+		await masterAccount.functionCall({
+			contractId: ftAccountId,
+			methodName: 'storage_deposit',
+			args: {
+				account_id: accountId,
+			},
+			attachedDeposit: nearAPI.utils.format.parseNearAmount(".01")
+		})
+}
+
+const transferFdai = async (masterAccount, accountId, amount, ftAccountId) => {
+		await masterAccount.functionCall({
+			contractId: ftAccountId,
+			methodName: 'ft_transfer',
+			args: {
+				receiver_id: accountId,
+				amount: amount,
+				memo: "transfer",
+				msg: "",
+			},
+			attachedDeposit: "1",
+			gas: 300000000000000
+		})
+
+
+}
+
+const transferCallFdai = async (masterAccount, accountId, amount, ftAccountId) => {
+		await masterAccount.functionCall({
+			contractId: ftAccountId,
+			methodName: 'ft_transfer_call',
+			args: {
+				receiver_id: accountId,
+				amount: amount,
+				memo: "transfer",
+				msg: "",
+			},
+			attachedDeposit: "1",
+			gas: 300000000000000
+		})
+}
+
+const balanceOfFdai = async (masterAccount, accountId, ftAccountId) => {
+		return await masterAccount.viewFunction(
+			ftAccountId,
+			'ft_balance_of',
+			{account_id: accountId},
+		)
+}
+
+const getEscrowBalance = async (masterAccount, accountId, molochAccountId) => {
+		return await masterAccount.viewFunction(
+			molochAccountId,
+			'get_escrow_user_balance',
+			{account_id: accountId},
+		)
+}
+
+const getBankBalance = async (masterAccount, molochAccountId) => {
+		return await masterAccount.viewFunction(
+			molochAccountId,
+			'get_bank_balance',
+			{},
+		)
+}
+
+
+
+
+
 // Setup Contract
 // and tear it down 
 // By deleting the contract account
@@ -19,6 +90,7 @@ describe('Moloch test', () => {
 	let contract
 	let contractAccount
 	let ftContract
+	const ftAccountId = "fdai.mrkeating.testnet"
 	const masterContractId = process.env.MASTER_ACCOUNT_ID
 	let contractAccountId = `${process.env.MOLOCH_ACCOUNT_ID}.${masterContractId}`
   const now = Date.now();
@@ -38,14 +110,25 @@ describe('Moloch test', () => {
 		contractAccount = await getOrCreateAccount(contractAccountId);
 		console.log('\n\n contract accountId:', contractAccountId, '\n\n');
 
+
+		ftAccount = await getOrCreateAccount(ftAccountId);
+		console.log('\n\n contract accountId:', ftAccountId, '\n\n');
+
 		masterAccount = await getOrCreateAccount(masterContractId);
 		console.log('\n\n master accountId:', masterContractId, '\n\n');
 
 
 
 		contract = new nearAPI.Contract(contractAccount, config.contractName, config.contractMethods);
-		ftContract = new nearAPI.Contract("boop.testnet", "boo.testnet", {changeMethods: ["ft_transfer"], viewMethods: ["ft_balance_of"]})
+		ftContract = new nearAPI.Contract(ftAccount, "mrkeating.testnet", {changeMethods: ["ft_transfer", "ft_transfer_call"], viewMethods: ["ft_balance_of"]})
 
+		// register
+		await registerFdai(masterAccount, masterContractId, ftAccountId)
+		await registerFdai(masterAccount, aliceId, ftAccountId)
+		await registerFdai(masterAccount, contractAccountId, ftAccountId)
+		await transferFdai(masterAccount, aliceId, "1000", ftAccountId)
+		await transferCallFdai(alice, contractAccountId, "100", ftAccountId)
+		await transferCallFdai(masterAccount, contractAccountId, "1000", ftAccountId)
 	})
 
 	// Create a proposal for bob
@@ -60,7 +143,7 @@ describe('Moloch test', () => {
 			contractId: contractAccountId,
 			methodName: 'submit_proposal',
 			args: {
-				applicant: bobId,
+				applicant: aliceId,
 				token_tribute: "10",
 				shares_requested: "10",
 				details: "Let's add a second member",
@@ -69,10 +152,30 @@ describe('Moloch test', () => {
 			gas: 300000000000000
 		});
 
-		// we can check by getting the balance
-		console.log("Here")
-		console.log(contractAccount)
+		// Check balances are correct
+		// moloch balance 1100
+		const molochBalance = await balanceOfFdai(masterAccount, contractAccountId, ftAccountId);
+		expect(molochBalance).toEqual("1100")
+		// alice balance 900
+		const aliceBalance = await balanceOfFdai(masterAccount, aliceId, ftAccountId);
+		
+		expect(aliceBalance).toEqual('900')
+		// Make sure the correct ammount is in escrow
+		// Check queue length
+		const bankBalance = await getBankBalance(masterAccount, contractAccountId)
+		expect(bankBalance).toEqual("0")
 
+		const escrowBalance = await getEscrowBalance(masterAccount, aliceId, contractAccountId)
+		expect(escrowBalance).toEqual("90")
+
+		const escrowBalanceMaster = await getEscrowBalance(masterAccount, masterContractId, contractAccountId)
+		expect(escrowBalanceMaster).toEqual("990")
 	})
+
+	// Member votes yes
+	// Bob has his proposal added
+	// Member processes proposal
+	// Then alice and master account vote yes and no
+	// get a rage quit
 
 })

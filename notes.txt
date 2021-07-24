@@ -1,3 +1,20 @@
 Minutes
 pre estimate - 05/09 - 360 (6 hours) 
 05/09 - 315 (5.25 hours) 
+Lindas again 6 hours
+
+
+-- Constructor
+- Test cases
+- Test every assert in the constructor
+- Test that the contract is initialized properly
+
+-- Submit Proposal
+- Test assert cases
+- Test transfer goes to contract account
+- Test empty queue
+- Test queue with all proposals having started
+- Make sure proposal is added to the queue
+
+Questions:
+Do we need a getter for proposals?

@@ -20,7 +20,7 @@ const config = {
 	walletUrl: "https://wallet.testnet.near.org",
 	helperUrl: "https://helper.testnet.near.org",
 	GAS: "200000000000000",
-	DEFAULT_NEW_ACCOUNT_AMOUNT: ".005",
+	DEFAULT_NEW_ACCOUNT_AMOUNT: ".2",
 	DEFAULT_NEW_CONTRACT_AMOUNT: "5",
 	contractName: "mrkeating.testnet",
 	contractMethods: {

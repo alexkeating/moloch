@@ -834,6 +834,16 @@ impl Moloch {
         };
     }
 
+    /// Get a users escrow balance
+    pub fn get_escrow_user_balance(&self, account_id: AccountId) -> U128 {
+        self.escrow.user_balance(account_id).into()
+    }
+
+    /// Get the guild bank balance
+    pub fn get_bank_balance(&self) -> U128 {
+        self.bank.get_balance().into()
+    }
+
     /// Checks that previous caller is the delegate key of a
     /// member with at least 1 share
     fn only_delegate(&self) {
@@ -2340,6 +2350,25 @@ mod tests {
         testing_env!(context);
         let mut contract = MockMoloch::new().build();
         let vote = contract.get_member_proposal_vote(bob(), 0);
+    }
+    #[test]
+    fn get_user_escrow_balance() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+        contract.escrow.deposit(robert(), 10);
+        let balance = contract.get_escrow_user_balance(robert());
+        assert_eq!(u128::from(balance), 10, "Guild escrow balance is incorrect");
+    }
+
+    #[test]
+    fn get_bank_balance() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new().build();
+        contract.bank.deposit(10);
+        let balance = contract.get_bank_balance();
+        assert_eq!(u128::from(balance), 10, "Guild bank balance is incorrect");
     }
 
     #[test]

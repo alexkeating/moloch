@@ -7,6 +7,9 @@ deploy:
 	$(MAKE) build
 	./deploy.sh
 
+clean:
+	./clean.sh
+
 deploy_contract:
 	$(MAKE) build
 	near deploy --wasmFile res/moloch.wasm --accountId $(MOLOCH_ACCOUNT_ID).mrkeating.testnet

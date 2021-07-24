@@ -48,6 +48,10 @@ impl GuildBank {
         self.balance += amount;
         return self.balance;
     }
+
+    pub fn get_balance(&self) -> u128 {
+        self.balance
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
