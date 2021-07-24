@@ -21,7 +21,7 @@ impl GuildBank {
         }
     }
 
-    pub fn withdraw(&self, receiver: AccountId, shares: u128, total_shares: u128) -> Promise {
+    pub fn withdraw(&mut self, receiver: AccountId, shares: u128, total_shares: u128) -> Promise {
         let amount = match self
             .balance
             .saturating_mul(shares)
@@ -30,12 +30,13 @@ impl GuildBank {
             Some(amount) => amount,
             None => panic!("Total shares is 0 a withdrawl cannot be calculated"),
         };
-        env::log(format!("Withdrawl: receiver: {}, amount: {}", receiver, amount).as_bytes());
+        self.balance -= amount;
+        env::log(format!("Withdraw: receiver: {}, amount: {}", receiver, amount).as_bytes());
         let prepaid_gas = env::prepaid_gas();
         ext_fungible_token::ft_transfer(
             receiver,
             U128::from(amount),
-            Some("Withdrawl from guild bank".to_string()),
+            Some("Withdraw from guild bank".to_string()),
             &self.token_id,
             0,
             // Change to a fixed gas amount
@@ -70,11 +71,43 @@ mod tests {
     fn fdai() -> AccountId {
         "fdai.testnet".to_string()
     }
+
+    // Withdraw normal
+    // Withdraw divide by 0
+    // deposit
+    #[test]
+    fn deposit() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = GuildBank::new(fdai());
+        contract.balance = 77;
+        contract.deposit(10);
+        assert_eq!(
+            contract.balance, 87,
+            "Balance did not have the correct amount deposited"
+        )
+    }
+
     #[test]
     fn withdraw() {
         let context = get_context(false);
         testing_env!(context);
-        let contract = GuildBank::new(fdai());
-        contract.withdraw(robert(), 0, 1);
+        let mut contract = GuildBank::new(fdai());
+        contract.balance = 77;
+        contract.withdraw(robert(), 10, 100);
+        assert_eq!(
+            contract.balance, 70,
+            "Balance did not have the correct amount withdrawn"
+        )
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Total shares is 0 a withdrawl cannot be calculated"#)]
+    fn withdraw_div_by_0() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = GuildBank::new(fdai());
+        contract.balance = 77;
+        contract.withdraw(robert(), 10, 0);
     }
 }

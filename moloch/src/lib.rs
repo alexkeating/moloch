@@ -6,9 +6,7 @@ use near_contract_standards::fungible_token::core_impl::ext_fungible_token;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::{UnorderedMap, Vector};
 use near_sdk::json_types::{U128, U64};
-use near_sdk::{
-    env, ext_contract, near_bindgen, setup_alloc, AccountId, PanicOnDefault, Promise, PromiseResult,
-};
+use near_sdk::{env, ext_contract, near_bindgen, setup_alloc, AccountId, PanicOnDefault, Promise};
 
 use serde::{Deserialize, Serialize};
 
@@ -215,7 +213,7 @@ impl Moloch {
 
         // create guild bank
         let bank = guild_bank::GuildBank::new(approved_token.clone());
-        let escrow = proposal_escrow::ProposalEscrow::new(approved_token.clone());
+        let escrow = proposal_escrow::ProposalEscrow::new();
 
         let mut members = UnorderedMap::new(b"members".to_vec());
         members.insert(
