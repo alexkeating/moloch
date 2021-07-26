@@ -18,3 +18,9 @@ Lindas again 6 hours
 
 Questions:
 Do we need a getter for proposals?
+
+Todos:
+- Add escrow asserts in tests
+- Add escrow withdrawl
+- Add storage and simulation test
+- Add a couple more end to end tests

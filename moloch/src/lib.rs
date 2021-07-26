@@ -322,7 +322,7 @@ impl Moloch {
             }
         }
         let starting_period =
-            max(self.get_current_period(), period_based_on_queue).saturating_add(1);
+            max(u64::from(self.get_current_period()), period_based_on_queue).saturating_add(1);
 
         // 5. Add to queue
         let proposal = Proposal {
@@ -359,7 +359,8 @@ impl Moloch {
     ///    updates their highest_index_yes_vote
     /// 4. If the member voted Yes and this is now the most total shares that the Guild had during
     ///    any Yes vote, update the proposal max_total_shares_at_yes_vote.
-    pub fn submit_vote(&mut self, proposal_index: u64, uint_vote: u8) {
+    pub fn submit_vote(&mut self, proposal_index: U64, uint_vote: u8) {
+        let proposal_index = u64::from(proposal_index);
         // 0. delegate check
         self.only_delegate();
         // 1. Get member
@@ -387,11 +388,11 @@ impl Moloch {
 
         // 4. Add some voting period checks
         assert!(
-            self.get_current_period() >= proposal.starting_period,
+            u64::from(self.get_current_period()) >= proposal.starting_period,
             "Voting period has not begun"
         );
         assert!(
-            !self.has_voting_period_expired(proposal.starting_period),
+            !self.has_voting_period_expired(proposal.starting_period.into()),
             "Proposal voting period has expired"
         );
 
@@ -467,18 +468,19 @@ impl Moloch {
     /// will fail. This means that members voting yes will only be obligated to contribute at most
     /// 3x what they were willing to contribute their share of the proposal cost, if 2/3 of the
     /// shares ragequit
-    pub fn process_proposal(&mut self, proposal_index: u64) -> Promise {
+    pub fn process_proposal(&mut self, proposal_index: U64) -> Promise {
+        let _proposal_index = u64::from(proposal_index);
         assert!(
-            proposal_index < self.proposal_queue.len(),
+            _proposal_index < self.proposal_queue.len(),
             "Proposal does not exist",
         );
-        let mut proposal = match self.proposal_queue.get(proposal_index) {
+        let mut proposal = match self.proposal_queue.get(_proposal_index) {
             Some(proposal) => proposal,
             None => panic!("Proposal index does not exist in the proposal_queue"),
         };
         // Check if current period is valid
         assert!(
-            self.get_current_period()
+            u64::from(self.get_current_period())
                 >= proposal
                     .starting_period
                     .saturating_add(self.voting_period_length)
@@ -490,8 +492,8 @@ impl Moloch {
             "Proposal has already been processed"
         );
         let mut previous_proposal_processed = true;
-        if proposal_index != 0 {
-            let previous_proposal = match self.proposal_queue.get(proposal_index.saturating_sub(1))
+        if _proposal_index != 0 {
+            let previous_proposal = match self.proposal_queue.get(_proposal_index.saturating_sub(1))
             {
                 Some(proposal) => proposal,
                 None => panic!("Proposal index does not exist in the proposal_queue"),
@@ -500,7 +502,7 @@ impl Moloch {
         }
 
         assert!(
-            proposal_index == 0 || previous_proposal_processed == true,
+            _proposal_index == 0 || previous_proposal_processed == true,
             "Previous proposal must be processed"
         );
 
@@ -523,7 +525,6 @@ impl Moloch {
             passed = false
         };
 
-        let mut failure_promise: Option<Promise> = None;
         if passed == true && !proposal.aborted && proposal.applicant_has_tributed {
             proposal.did_pass = true;
             let member_exists = match self.members.get(&proposal.applicant) {
@@ -574,68 +575,40 @@ impl Moloch {
 
             // Proposal failed and applicant submitted
         } else if proposal.applicant_has_tributed {
-            let prepaid_gas = env::prepaid_gas();
-            failure_promise = Some(ext_fungible_token::ft_transfer(
-                proposal.applicant.clone(),
-                U128::from(proposal.token_tribute),
-                Some("return proposal token tribute for failed proposal".to_string()),
-                &self.token_id,
-                0,
-                prepaid_gas / 5,
-            ));
+            // Return proposal token_tribute
+            self.escrow
+                .deposit(proposal.applicant.clone(), proposal.token_tribute);
         }
 
         // TODO: Are these rolled back if the transaction failed
-        // Pay processing reward
-        let prepaid_gas = env::prepaid_gas();
-        let transfer_promise = ext_fungible_token::ft_transfer(
-            env::predecessor_account_id(),
-            U128::from(proposal.token_tribute),
-            Some("pay out processing reward for processing proposal".to_string()),
-            &self.token_id,
-            0,
-            prepaid_gas / 5,
-        )
-        .then(ext_fungible_token::ft_transfer(
+        self.escrow.deposit(
             proposal.proposer.clone(),
-            U128::from(self.proposal_deposit.saturating_sub(self.processing_reward)),
-            Some("return proposal deposit for processed proposal".to_string()),
-            &self.token_id,
-            0,
-            prepaid_gas / 5,
-        ));
+            self.proposal_deposit.saturating_sub(self.processing_reward),
+        );
 
         let message = format!(
                 "Proposal Processed! proposal_index: {}, proposal_applicant: {}, proposal_proposer: {}, proposal_token_tribute: {}, proposal_shares_requested: {}, passed: {}",
-                proposal_index,
+                _proposal_index,
                 proposal.applicant,
                 proposal.proposer,
                 proposal.token_tribute,
                 proposal.shares_requested,
                 proposal.did_pass,
             );
+        self.proposal_queue
+            .replace(proposal_index.into(), &proposal);
+        env::log(message.as_bytes());
 
-        if failure_promise.is_some() == true {
-            let unwraped_failure_promise = failure_promise.unwrap();
-            return transfer_promise.then(unwraped_failure_promise).then(
-                ext_self::update_proposal(
-                    proposal_index.into(),
-                    proposal,
-                    message,
-                    &env::current_account_id(),
-                    0,
-                    prepaid_gas / 5,
-                ),
-            );
-        }
-        transfer_promise.then(ext_self::update_proposal(
-            proposal_index.into(),
-            proposal,
-            message,
-            &env::current_account_id(),
+        // Pay processing reward
+        let prepaid_gas = env::prepaid_gas();
+        ext_fungible_token::ft_transfer(
+            env::predecessor_account_id(),
+            U128::from(self.processing_reward),
+            Some("pay out processing reward for processing proposal".to_string()),
+            &self.token_id,
             0,
-            prepaid_gas / 5,
-        ))
+            prepaid_gas / 2,
+        )
     }
 
     /// A member can ragequit at any time, so long as the member has not voted Yes on any proposal
@@ -646,7 +619,9 @@ impl Moloch {
     /// 2. Reduce the total shares by the shares_to_burn
     /// 3. Instruct the guild bank to send the member their proportional amount of the approved
     ///    token
-    pub fn rage_quit(&mut self, shares_to_burn: u128) -> Promise {
+    pub fn rage_quit(&mut self, shares_to_burn: U128) -> Promise {
+        let _shares_to_burn = u128::from(shares_to_burn);
+
         // only_member modifier
         self.only_member();
         // Check insuffcient shares
@@ -655,18 +630,18 @@ impl Moloch {
         let initial_total_shares = self.total_shares;
 
         assert!(
-            member.shares >= shares_to_burn,
+            member.shares >= _shares_to_burn,
             "Not enough shares to be burned"
         );
         // Check can rage_quit
-        let can_rage_quit = self.can_rage_quit(member.highest_index_yes_vote);
+        let can_rage_quit = self.can_rage_quit(member.highest_index_yes_vote.into());
         assert!(
             can_rage_quit,
             "Can't rage quit until the highest index proposal member voted YES is processed",
         );
         // Burn shares
-        member.shares = member.shares.saturating_sub(shares_to_burn);
-        self.total_shares = self.total_shares.saturating_sub(shares_to_burn);
+        member.shares = member.shares.saturating_sub(_shares_to_burn);
+        self.total_shares = self.total_shares.saturating_sub(_shares_to_burn);
         self.members.insert(&predecessor_account_id, &member);
 
         // log rage_quit
@@ -674,25 +649,29 @@ impl Moloch {
             format!(
                 "Rage quit! account: {}, shares_burned: {}",
                 env::predecessor_account_id(),
-                shares_to_burn,
+                _shares_to_burn,
             )
             .as_bytes(),
         );
 
         // TODO: Does the above get rolled back if this fails
-        self.bank
-            .withdraw(predecessor_account_id, shares_to_burn, initial_total_shares)
+        self.bank.withdraw(
+            predecessor_account_id,
+            _shares_to_burn,
+            initial_total_shares,
+        )
     }
 
     /// TODO: Add documentation
-    pub fn abort(&mut self, proposal_index: u64) {
+    pub fn abort(&mut self, proposal_index: U64) {
+        let _proposal_index = u64::from(proposal_index);
         // Check if proposal index is within the length
         assert!(
-            proposal_index < self.proposal_queue.len(),
+            _proposal_index < self.proposal_queue.len(),
             "Proposal does not exist"
         );
         // Get the proposal
-        let mut proposal = self.proposal_queue.get(proposal_index).unwrap();
+        let mut proposal = self.proposal_queue.get(_proposal_index).unwrap();
         // Check sender is the applicant
         assert!(
             env::predecessor_account_id() == proposal.applicant,
@@ -702,28 +681,24 @@ impl Moloch {
         // Check if abort window has passed
         let current_period = self.get_current_period();
         let abort_window = proposal.starting_period.saturating_add(self.abort_window);
-        assert!(current_period < abort_window, "Abort window has passed!");
+        assert!(
+            u64::from(current_period) < u64::from(abort_window),
+            "Abort window has passed!"
+        );
         // Check if proposal has been aborted
         assert!(!proposal.aborted, "Proposal has already been aborted");
         // Reset proposal params for abort
         proposal.aborted = true;
         proposal.token_tribute = 0;
 
-        self.proposal_queue.replace(proposal_index, &proposal);
+        self.proposal_queue.replace(_proposal_index, &proposal);
 
         // Log abort
         env::log(format!("Proposal was aborted by {}", env::predecessor_account_id(),).as_bytes());
 
         // return deposit
-        let prepaid_gas = env::prepaid_gas();
-        ext_fungible_token::ft_transfer(
-            proposal.proposer.to_string(),
-            U128::from(self.proposal_deposit),
-            Some("Return the submitted proposal deposit".to_string()),
-            &self.token_id,
-            0,
-            prepaid_gas / 2,
-        );
+        self.escrow
+            .deposit(proposal.proposer.clone(), self.processing_reward);
     }
 
     /// By default when a member is accepted their delegateKey is set to their member accountId. At
@@ -790,44 +765,48 @@ impl Moloch {
 
     /// The difference between the block_timestamp and the summoning_time is used to figure out how
     /// many periods have elapsed and thus what the current period is.
-    pub fn get_current_period(&self) -> u64 {
+    pub fn get_current_period(&self) -> U64 {
         let period_64 = env::block_timestamp().saturating_sub(self.summoning_time);
-        period_64.wrapping_div(self.period_duration)
+        period_64.wrapping_div(self.period_duration).into()
     }
 
     /// Returns the length of the proposal queue
-    pub fn get_proposal_queue_length(&self) -> u64 {
-        return self.proposal_queue.len();
+    pub fn get_proposal_queue_length(&self) -> U64 {
+        return self.proposal_queue.len().into();
     }
 
     /// Returns true if the highest_index_yes_vote has been processed
-    pub fn can_rage_quit(&self, highest_index_yes_vote: u64) -> bool {
+    pub fn can_rage_quit(&self, highest_index_yes_vote: U64) -> bool {
+        let _highest_index_yes_vote = u64::from(highest_index_yes_vote);
+
         assert!(
-            highest_index_yes_vote < self.proposal_queue.len(),
+            _highest_index_yes_vote < self.proposal_queue.len(),
             "Proposal does not exist"
         );
-        return match self.proposal_queue.get(highest_index_yes_vote) {
+        return match self.proposal_queue.get(_highest_index_yes_vote) {
             Some(proposal) => proposal.processed,
             None => false,
         };
     }
 
-    pub fn has_voting_period_expired(&self, starting_period: u64) -> bool {
-        return self.get_current_period()
-            >= starting_period.saturating_add(self.voting_period_length);
+    pub fn has_voting_period_expired(&self, starting_period: U64) -> bool {
+        let _starting_period = u64::from(starting_period);
+        return u64::from(self.get_current_period())
+            >= _starting_period.saturating_add(self.voting_period_length);
     }
 
-    pub fn get_member_proposal_vote(&self, member_id: AccountId, proposal_index: u64) -> Vote {
+    pub fn get_member_proposal_vote(&self, member_id: AccountId, proposal_index: U64) -> Vote {
+        let _proposal_index = u64::from(proposal_index);
         let member = match self.members.get(&member_id) {
             Some(member) => member,
             None => Member::default(),
         };
         assert!(member.exists, "Member does not exist");
         assert!(
-            proposal_index < self.proposal_queue.len(),
+            _proposal_index < self.proposal_queue.len(),
             "Proposal does not exist"
         );
-        let proposal = self.proposal_queue.get(proposal_index).unwrap();
+        let proposal = self.proposal_queue.get(_proposal_index).unwrap();
         return match proposal.votes_by_member.get(&member_id) {
             Some(vote) => *vote,
             None => Vote::Null,
@@ -1321,7 +1300,7 @@ mod tests {
             .block_timestamp((contract.summoning_time + contract.period_duration).into())
             .build();
         testing_env!(context);
-        contract.submit_vote(0, 1);
+        contract.submit_vote(0.into(), 1);
 
         // Assert that the correct proposal was voted on
         // and that it was marked as a yes
@@ -1350,7 +1329,7 @@ mod tests {
             .build();
 
         testing_env!(context);
-        contract.submit_vote(0, 2);
+        contract.submit_vote(0.into(), 2);
 
         // Assert that the correct proposal was voted on
         // and that it was marked as a yes
@@ -1388,9 +1367,9 @@ mod tests {
         testing_env!(context_block_timestamp.build());
 
         // Actions by bob
-        contract.submit_vote(0, 1);
+        contract.submit_vote(0.into(), 1);
         testing_env!(context_block_timestamp.build());
-        contract.submit_vote(1, 1);
+        contract.submit_vote(1.into(), 1);
         let member = contract.members.get(&bob()).unwrap();
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(
@@ -1407,9 +1386,9 @@ mod tests {
             .predecessor_account_id(robert().try_into().unwrap())
             .build());
 
-        contract.submit_vote(0, 1);
+        contract.submit_vote(0.into(), 1);
         testing_env!(context_block_timestamp.build());
-        contract.submit_vote(1, 2);
+        contract.submit_vote(1.into(), 2);
         let member = contract.members.get(&robert()).unwrap();
         assert_eq!(
             member.highest_index_yes_vote, 0,
@@ -1421,9 +1400,9 @@ mod tests {
             .predecessor_account_id(alice().try_into().unwrap())
             .build());
 
-        contract.submit_vote(0, 1);
+        contract.submit_vote(0.into(), 1);
         testing_env!(context_block_timestamp.build());
-        contract.submit_vote(1, 1);
+        contract.submit_vote(1.into(), 1);
         let member = contract.members.get(&alice()).unwrap();
         assert_eq!(
             member.highest_index_yes_vote, 1,
@@ -1450,7 +1429,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = MockMoloch::new().build();
-        contract.submit_vote(0, 1)
+        contract.submit_vote(0.into(), 1)
     }
 
     #[test]
@@ -1460,7 +1439,7 @@ mod tests {
         testing_env!(context);
         let proposal = MockProposal::new().build();
         let mut contract = MockMoloch::new().add_proposal(proposal).build();
-        contract.submit_vote(0, 3)
+        contract.submit_vote(0.into(), 3)
     }
 
     // voting has not begun
@@ -1472,7 +1451,7 @@ mod tests {
 
         let proposal = MockProposal::new().build();
         let mut contract = MockMoloch::new().add_proposal(proposal).build();
-        contract.submit_vote(0, 2)
+        contract.submit_vote(0.into(), 2)
     }
 
     // voting has expired
@@ -1490,7 +1469,7 @@ mod tests {
         let context = context_builder.block_timestamp(block_time.into()).build();
         testing_env!(context);
 
-        contract.submit_vote(0, 2)
+        contract.submit_vote(0.into(), 2)
     }
 
     // member has already voted
@@ -1507,8 +1486,8 @@ mod tests {
         let context = context_builder.block_timestamp(block_time.into()).build();
         testing_env!(context);
 
-        contract.submit_vote(0, 2);
-        contract.submit_vote(0, 1);
+        contract.submit_vote(0.into(), 2);
+        contract.submit_vote(0.into(), 1);
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.no_votes, 1)
     }
@@ -1527,7 +1506,7 @@ mod tests {
         let block_time = contract.summoning_time + contract.period_duration;
         let context = context_builder.block_timestamp(block_time.into()).build();
         testing_env!(context);
-        contract.submit_vote(0, 2);
+        contract.submit_vote(0.into(), 2);
     }
 
     // Member not delegate
@@ -1547,56 +1526,56 @@ mod tests {
             .predecessor_account_id(alice().try_into().unwrap())
             .build();
         testing_env!(context);
-        contract.submit_vote(0, 2);
+        contract.submit_vote(0.into(), 2);
     }
 
     // Test passed proposal
-    // #[test]
-    // fn process_proposal_passed() {
-    //     let context = get_context(false);
-    //     testing_env!(context);
-    //     let member = MockMember::new().build();
-    //     let proposal = MockProposal::new()
-    //         .yes_vote(&member)
-    //         .applicant_has_tributed(true)
-    //         .build();
-    //     let mut contract = MockMoloch::new()
-    //         .add_proposal(proposal)
-    //         .add_member(member)
-    //         .build();
-    //     let proposal = contract.proposal_queue.get(0).unwrap();
-    //     assert_eq!(proposal.processed, false, "Proposal has been processed");
-    //     assert_eq!(
-    //         contract.total_shares_requested, proposal.shares_requested,
-    //         "Total shares requested has not been set correctly",
-    //     );
-    //     let mut context_builder = get_context_builder(false);
-    //     let context = context_builder
-    //         .block_timestamp(
-    //             contract.summoning_time
-    //                 + (contract.period_duration
-    //                     * (contract.voting_period_length + contract.grace_period_length + 1)),
-    //         )
-    //         .build();
-    //     testing_env!(context);
-    //     contract.process_proposal(0);
+    #[test]
+    fn process_proposal_passed() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().build();
+        let proposal = MockProposal::new()
+            .yes_vote(&member)
+            .applicant_has_tributed(true)
+            .build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .add_member(member)
+            .build();
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.processed, false, "Proposal has been processed");
+        assert_eq!(
+            contract.total_shares_requested, proposal.shares_requested,
+            "Total shares requested has not been set correctly",
+        );
+        let mut context_builder = get_context_builder(false);
+        let context = context_builder
+            .block_timestamp(
+                contract.summoning_time
+                    + (contract.period_duration
+                        * (contract.voting_period_length + contract.grace_period_length + 1)),
+            )
+            .build();
+        testing_env!(context);
+        contract.process_proposal(0.into());
 
-    //     let proposal = contract.proposal_queue.get(0).unwrap();
-    //     assert_eq!(proposal.processed, true, "Proposal has not been processed");
-    //     assert_eq!(
-    //         contract.total_shares_requested, 0,
-    //         "Number of requested shares has not been subtracted",
-    //     );
-    //     let member = contract.members.get(&robert()).unwrap();
-    //     assert_eq!(
-    //         member.shares, 20,
-    //         "Member does not have the correct number not shares"
-    //     );
-    //     assert_eq!(
-    //         contract.total_shares, 21,
-    //         "Total shares has not been updated correctly"
-    //     );
-    // }
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.processed, true, "Proposal has not been processed");
+        assert_eq!(
+            contract.total_shares_requested, 0,
+            "Number of requested shares has not been subtracted",
+        );
+        let member = contract.members.get(&robert()).unwrap();
+        assert_eq!(
+            member.shares, 20,
+            "Member does not have the correct number not shares"
+        );
+        assert_eq!(
+            contract.total_shares, 21,
+            "Total shares has not been updated correctly"
+        );
+    }
 
     // Test passed proposal existing member, Assert shares are added
     #[test]
@@ -1625,7 +1604,7 @@ mod tests {
             )
             .build();
         testing_env!(context);
-        contract.process_proposal(0);
+        contract.process_proposal(0.into());
 
         let member = contract.members.get(&alice()).unwrap();
         assert_eq!(
@@ -1661,7 +1640,7 @@ mod tests {
             )
             .build();
         testing_env!(context);
-        contract.process_proposal(0);
+        contract.process_proposal(0.into());
 
         let member = contract.members.get(&alice()).unwrap();
         let member_delegate_key = contract.members_by_delegate_key.get(&alice()).unwrap();
@@ -1719,7 +1698,7 @@ mod tests {
             alice(),
             "Delegate key has not been setup correctly"
         );
-        contract.process_proposal(0);
+        contract.process_proposal(0.into());
 
         let member_robert = contract.members.get(&robert()).unwrap();
         assert_eq!(
@@ -1755,140 +1734,140 @@ mod tests {
     // Assert proposal has processed set to true
     // Assert total_shares_requested has the proposal shares subtracted
     // Test failed proposal too many nos
-    // #[test]
-    // fn process_proposal_failed() {
-    //     let context = get_context(false);
-    //     testing_env!(context);
-    //     let member = MockMember::new().build();
-    //     let proposal = MockProposal::new()
-    //         .no_vote(&member)
-    //         .applicant_has_tributed(true)
-    //         .build();
-    //     let mut contract = MockMoloch::new()
-    //         .add_proposal(proposal)
-    //         .add_member(member)
-    //         .build();
-    //     let proposal = contract.proposal_queue.get(0).unwrap();
-    //     assert_eq!(proposal.processed, false, "Proposal has been processed");
-    //     assert_eq!(
-    //         contract.total_shares_requested, proposal.shares_requested,
-    //         "Total shares requested has not been set correctly",
-    //     );
-    //     let mut context_builder = get_context_builder(false);
-    //     let context = context_builder
-    //         .block_timestamp(
-    //             contract.summoning_time
-    //                 + (contract.period_duration
-    //                     * (contract.voting_period_length + contract.grace_period_length + 1)),
-    //         )
-    //         .build();
-    //     testing_env!(context);
-    //     contract.process_proposal(0);
+    #[test]
+    fn process_proposal_failed() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().build();
+        let proposal = MockProposal::new()
+            .no_vote(&member)
+            .applicant_has_tributed(true)
+            .build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .add_member(member)
+            .build();
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.processed, false, "Proposal has been processed");
+        assert_eq!(
+            contract.total_shares_requested, proposal.shares_requested,
+            "Total shares requested has not been set correctly",
+        );
+        let mut context_builder = get_context_builder(false);
+        let context = context_builder
+            .block_timestamp(
+                contract.summoning_time
+                    + (contract.period_duration
+                        * (contract.voting_period_length + contract.grace_period_length + 1)),
+            )
+            .build();
+        testing_env!(context);
+        contract.process_proposal(0.into());
 
-    //     let proposal = contract.proposal_queue.get(0).unwrap();
-    //     assert_eq!(proposal.processed, true, "Proposal has not been processed");
-    //     assert_eq!(
-    //         contract.total_shares_requested, 0,
-    //         "Number of requested shares has not been subtracted",
-    //     );
-    //     let member = contract.members.get(&robert()).unwrap();
-    //     assert_eq!(
-    //         member.shares, 10,
-    //         "Member does not have the correct number not shares"
-    //     );
-    //     assert_eq!(contract.total_shares, 11, "Total shares is not correct");
-    // }
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.processed, true, "Proposal has not been processed");
+        assert_eq!(
+            contract.total_shares_requested, 0,
+            "Number of requested shares has not been subtracted",
+        );
+        let member = contract.members.get(&robert()).unwrap();
+        assert_eq!(
+            member.shares, 10,
+            "Member does not have the correct number not shares"
+        );
+        assert_eq!(contract.total_shares, 11, "Total shares is not correct");
+    }
 
     // Test failed proposal no tribute sent
-    // #[test]
-    // fn process_proposal_failed_no_tribute_sent() {
-    //     let context = get_context(false);
-    //     testing_env!(context);
-    //     let member = MockMember::new().build();
-    //     let proposal = MockProposal::new()
-    //         .yes_vote(&member)
-    //         .applicant_has_tributed(false)
-    //         .build();
-    //     let mut contract = MockMoloch::new()
-    //         .add_proposal(proposal)
-    //         .add_member(member)
-    //         .build();
-    //     let proposal = contract.proposal_queue.get(0).unwrap();
-    //     assert_eq!(proposal.processed, false, "Proposal has been processed");
-    //     assert_eq!(
-    //         contract.total_shares_requested, proposal.shares_requested,
-    //         "Total shares requested has not been set correctly",
-    //     );
-    //     let mut context_builder = get_context_builder(false);
-    //     let context = context_builder
-    //         .block_timestamp(
-    //             contract.summoning_time
-    //                 + (contract.period_duration
-    //                     * (contract.voting_period_length + contract.grace_period_length + 1)),
-    //         )
-    //         .build();
-    //     testing_env!(context);
-    //     contract.process_proposal(0);
+    #[test]
+    fn process_proposal_failed_no_tribute_sent() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().build();
+        let proposal = MockProposal::new()
+            .yes_vote(&member)
+            .applicant_has_tributed(false)
+            .build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .add_member(member)
+            .build();
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.processed, false, "Proposal has been processed");
+        assert_eq!(
+            contract.total_shares_requested, proposal.shares_requested,
+            "Total shares requested has not been set correctly",
+        );
+        let mut context_builder = get_context_builder(false);
+        let context = context_builder
+            .block_timestamp(
+                contract.summoning_time
+                    + (contract.period_duration
+                        * (contract.voting_period_length + contract.grace_period_length + 1)),
+            )
+            .build();
+        testing_env!(context);
+        contract.process_proposal(0.into());
 
-    //     let proposal = contract.proposal_queue.get(0).unwrap();
-    //     assert_eq!(proposal.processed, true, "Proposal has not been processed");
-    //     assert_eq!(
-    //         contract.total_shares_requested, 0,
-    //         "Number of requested shares has not been subtracted",
-    //     );
-    //     let member = contract.members.get(&robert()).unwrap();
-    //     assert_eq!(
-    //         member.shares, 10,
-    //         "Member does not have the correct number not shares"
-    //     );
-    //     assert_eq!(contract.total_shares, 11, "Total shares is not correct");
-    // }
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.processed, true, "Proposal has not been processed");
+        assert_eq!(
+            contract.total_shares_requested, 0,
+            "Number of requested shares has not been subtracted",
+        );
+        let member = contract.members.get(&robert()).unwrap();
+        assert_eq!(
+            member.shares, 10,
+            "Member does not have the correct number not shares"
+        );
+        assert_eq!(contract.total_shares, 11, "Total shares is not correct");
+    }
 
     // Test failed proposal aborted
-    // #[test]
-    // fn process_proposal_failed_aborted() {
-    //     let context = get_context(false);
-    //     testing_env!(context);
-    //     let member = MockMember::new().build();
-    //     let proposal = MockProposal::new()
-    //         .yes_vote(&member)
-    //         .applicant_has_tributed(true)
-    //         .aborted(true)
-    //         .build();
-    //     let mut contract = MockMoloch::new()
-    //         .add_proposal(proposal)
-    //         .add_member(member)
-    //         .build();
-    //     let proposal = contract.proposal_queue.get(0).unwrap();
-    //     assert_eq!(proposal.processed, false, "Proposal has been processed");
-    //     assert_eq!(
-    //         contract.total_shares_requested, proposal.shares_requested,
-    //         "Total shares requested has not been set correctly",
-    //     );
-    //     let mut context_builder = get_context_builder(false);
-    //     let context = context_builder
-    //         .block_timestamp(
-    //             contract.summoning_time
-    //                 + (contract.period_duration
-    //                     * (contract.voting_period_length + contract.grace_period_length + 1)),
-    //         )
-    //         .build();
-    //     testing_env!(context);
-    //     contract.process_proposal(0);
+    #[test]
+    fn process_proposal_failed_aborted() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().build();
+        let proposal = MockProposal::new()
+            .yes_vote(&member)
+            .applicant_has_tributed(true)
+            .aborted(true)
+            .build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .add_member(member)
+            .build();
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.processed, false, "Proposal has been processed");
+        assert_eq!(
+            contract.total_shares_requested, proposal.shares_requested,
+            "Total shares requested has not been set correctly",
+        );
+        let mut context_builder = get_context_builder(false);
+        let context = context_builder
+            .block_timestamp(
+                contract.summoning_time
+                    + (contract.period_duration
+                        * (contract.voting_period_length + contract.grace_period_length + 1)),
+            )
+            .build();
+        testing_env!(context);
+        contract.process_proposal(0.into());
 
-    //     let proposal = contract.proposal_queue.get(0).unwrap();
-    //     assert_eq!(proposal.processed, true, "Proposal has not been processed");
-    //     assert_eq!(
-    //         contract.total_shares_requested, 0,
-    //         "Number of requested shares has not been subtracted",
-    //     );
-    //     let member = contract.members.get(&robert()).unwrap();
-    //     assert_eq!(
-    //         member.shares, 10,
-    //         "Member does not have the correct number not shares"
-    //     );
-    //     assert_eq!(contract.total_shares, 11, "Total shares is not correct");
-    // }
+        let proposal = contract.proposal_queue.get(0).unwrap();
+        assert_eq!(proposal.processed, true, "Proposal has not been processed");
+        assert_eq!(
+            contract.total_shares_requested, 0,
+            "Number of requested shares has not been subtracted",
+        );
+        let member = contract.members.get(&robert()).unwrap();
+        assert_eq!(
+            member.shares, 10,
+            "Member does not have the correct number not shares"
+        );
+        assert_eq!(contract.total_shares, 11, "Total shares is not correct");
+    }
 
     // Proposall does not exist
     #[test]
@@ -1897,7 +1876,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = MockMoloch::new().build();
-        contract.process_proposal(0);
+        contract.process_proposal(0.into());
     }
 
     #[test]
@@ -1907,7 +1886,7 @@ mod tests {
         testing_env!(context);
         let proposal = MockProposal::new().build();
         let mut contract = MockMoloch::new().add_proposal(proposal).build();
-        contract.process_proposal(0);
+        contract.process_proposal(0.into());
     }
 
     #[test]
@@ -1926,7 +1905,7 @@ mod tests {
             )
             .build());
 
-        contract.process_proposal(0);
+        contract.process_proposal(0.into());
     }
 
     #[test]
@@ -1948,7 +1927,7 @@ mod tests {
                         * (contract.voting_period_length + contract.grace_period_length + 1)
             )
             .build());
-        contract.process_proposal(1);
+        contract.process_proposal(1.into());
     }
 
     #[test]
@@ -1970,7 +1949,7 @@ mod tests {
             .predecessor_account_id(robert().try_into().unwrap())
             .build());
 
-        contract.rage_quit(30);
+        contract.rage_quit(30.into());
         assert_eq!(
             contract.total_shares, 1,
             "Total shares have not properly been subtracted"
@@ -2000,7 +1979,7 @@ mod tests {
             .predecessor_account_id(robert().try_into().unwrap())
             .build());
 
-        contract.rage_quit(20);
+        contract.rage_quit(20.into());
         assert_eq!(
             contract.total_shares, 11,
             "Total shares have not properly been subtracted"
@@ -2031,7 +2010,7 @@ mod tests {
             .predecessor_account_id(robert().try_into().unwrap())
             .build());
 
-        contract.rage_quit(20);
+        contract.rage_quit(20.into());
     }
 
     // Not a member
@@ -2047,7 +2026,7 @@ mod tests {
             .predecessor_account_id(robert().try_into().unwrap())
             .build());
 
-        contract.rage_quit(20);
+        contract.rage_quit(20.into());
     }
 
     // Simple abort
@@ -2062,7 +2041,7 @@ mod tests {
             .predecessor_account_id(robert().try_into().unwrap())
             .block_timestamp(contract.summoning_time + contract.period_duration)
             .build());
-        contract.abort(0);
+        contract.abort(0.into());
 
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.aborted, true);
@@ -2081,7 +2060,7 @@ mod tests {
             .predecessor_account_id(robert().try_into().unwrap())
             .block_timestamp(contract.summoning_time + contract.period_duration)
             .build());
-        contract.abort(0);
+        contract.abort(0.into());
     }
 
     // Caller is not applicant
@@ -2096,7 +2075,7 @@ mod tests {
         testing_env!(context_builder
             .block_timestamp(contract.summoning_time + contract.period_duration)
             .build());
-        contract.abort(0);
+        contract.abort(0.into());
     }
 
     // Abort window has passed
@@ -2112,7 +2091,7 @@ mod tests {
             .predecessor_account_id(robert().try_into().unwrap())
             .block_timestamp(contract.summoning_time + contract.period_duration * 5)
             .build());
-        contract.abort(0);
+        contract.abort(0.into());
     }
 
     // Proposal has already been aborted
@@ -2131,7 +2110,7 @@ mod tests {
             .predecessor_account_id(robert().try_into().unwrap())
             .block_timestamp(contract.summoning_time + contract.period_duration)
             .build());
-        contract.abort(0);
+        contract.abort(0.into());
     }
 
     #[test]
@@ -2216,7 +2195,7 @@ mod tests {
         testing_env!(context);
         let contract = MockMoloch::new().build();
         let period = contract.get_current_period();
-        assert_eq!(period, 0, "Current period is not 0")
+        assert_eq!(u64::from(period), 0, "Current period is not 0")
     }
 
     #[test]
@@ -2229,7 +2208,7 @@ mod tests {
             .block_timestamp(contract.summoning_time + contract.period_duration * 3)
             .build());
         let period = contract.get_current_period();
-        assert_eq!(period, 3, "Current period is not 3")
+        assert_eq!(u64::from(period), 3, "Current period is not 3")
     }
 
     #[test]
@@ -2238,7 +2217,7 @@ mod tests {
         testing_env!(context);
         let contract = MockMoloch::new().build();
         let period = contract.get_proposal_queue_length();
-        assert_eq!(period, 0)
+        assert_eq!(u64::from(period), 0)
     }
 
     #[test]
@@ -2252,7 +2231,7 @@ mod tests {
             .add_proposal(proposal_two)
             .build();
         let period = contract.get_proposal_queue_length();
-        assert_eq!(period, 2)
+        assert_eq!(u64::from(period), 2)
     }
 
     #[test]
@@ -2261,7 +2240,7 @@ mod tests {
         testing_env!(context);
         let proposal = MockProposal::new().processed(true).build();
         let mut contract = MockMoloch::new().add_proposal(proposal).build();
-        let can = contract.can_rage_quit(0);
+        let can = contract.can_rage_quit(0.into());
         assert_eq!(can, true)
     }
 
@@ -2271,7 +2250,7 @@ mod tests {
         testing_env!(context);
         let proposal = MockProposal::new().processed(false).build();
         let mut contract = MockMoloch::new().add_proposal(proposal).build();
-        let can = contract.can_rage_quit(0);
+        let can = contract.can_rage_quit(0.into());
         assert_eq!(can, false)
     }
 
@@ -2281,7 +2260,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = MockMoloch::new().build();
-        let can = contract.can_rage_quit(0);
+        let can = contract.can_rage_quit(0.into());
     }
 
     #[test]
@@ -2289,7 +2268,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let contract = MockMoloch::new().build();
-        let expired = contract.has_voting_period_expired(0);
+        let expired = contract.has_voting_period_expired(0.into());
         assert_eq!(expired, false, "The voting period has expired")
     }
 
@@ -2304,7 +2283,7 @@ mod tests {
                 contract.summoning_time + contract.period_duration * contract.voting_period_length
             )
             .build());
-        let expired = contract.has_voting_period_expired(0);
+        let expired = contract.has_voting_period_expired(0.into());
         assert_eq!(expired, true, "The voting period has not expired")
     }
 
@@ -2315,7 +2294,7 @@ mod tests {
         let member = MockMember::new().delegate_key(bob()).build();
         let proposal = MockProposal::new().yes_vote(&member).build();
         let mut contract = MockMoloch::new().add_proposal(proposal).build();
-        let vote = contract.get_member_proposal_vote(bob(), 0);
+        let vote = contract.get_member_proposal_vote(bob(), 0.into());
         assert_eq!(vote, Vote::Yes, "Bob did not vote yes")
     }
 
@@ -2326,7 +2305,7 @@ mod tests {
         let member = MockMember::new().build();
         let proposal = MockProposal::new().yes_vote(&member).build();
         let mut contract = MockMoloch::new().add_proposal(proposal).build();
-        let vote = contract.get_member_proposal_vote(bob(), 0);
+        let vote = contract.get_member_proposal_vote(bob(), 0.into());
         assert_eq!(vote, Vote::Null, "Bob has not voted yes yet")
     }
 
@@ -2339,7 +2318,7 @@ mod tests {
         let member = MockMember::new().build();
         let proposal = MockProposal::new().yes_vote(&member).build();
         let mut contract = MockMoloch::new().add_proposal(proposal).build();
-        let vote = contract.get_member_proposal_vote(robert(), 0);
+        let vote = contract.get_member_proposal_vote(robert(), 0.into());
     }
 
     // Proposal does not exist
@@ -2349,7 +2328,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = MockMoloch::new().build();
-        let vote = contract.get_member_proposal_vote(bob(), 0);
+        let vote = contract.get_member_proposal_vote(bob(), 0.into());
     }
     #[test]
     fn get_user_escrow_balance() {
