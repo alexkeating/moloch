@@ -133,6 +133,7 @@ describe("Moloch test", () => {
     await registerFdai(masterAccount, masterContractId, ftAccountId);
     await registerFdai(masterAccount, aliceId, ftAccountId);
     await registerFdai(masterAccount, contractAccountId, ftAccountId);
+    await registerFdai(masterAccount, bobId, ftAccountId);
     await transferFdai(masterAccount, aliceId, "1000", ftAccountId);
     await transferCallFdai(alice, contractAccountId, "100", ftAccountId);
     await transferCallFdai(
@@ -235,9 +236,11 @@ describe("Moloch test", () => {
   test("Process passed proposal", async () => {
     // Move move tribute to the guild bank
     // grace period + voting period = 3
-    process_period = proposalPeriod + 3;
+    process_period = parseInt(proposalPeriod) + 3;
+    console.log(process_period);
     current_period = await getCurentPeriod(masterAccount, contractAccountId);
-    let periodsLeft = process_period - current_period;
+    console.log(current_period);
+    let periodsLeft = process_period - parseInt(current_period);
     if (periodsLeft >= 0) {
       await delay(10000 * (periodsLeft + 1));
     }
@@ -246,7 +249,9 @@ describe("Moloch test", () => {
       methodName: "process_proposal",
       args: {
         proposal_index: "0"
-      }
+      },
+      attachedDeposit: "1",
+      gas: 300000000000000
     });
 
     const bankBalance = await getBankBalance(masterAccount, contractAccountId);
@@ -272,7 +277,14 @@ describe("Moloch test", () => {
       contractAccountId
     );
     expect(escrowBalanceMaster).toEqual("999");
-  }, 60000);
+
+    const molochBalance = await balanceOfFdai(
+      masterAccount,
+      contractAccountId,
+      ftAccountId
+    );
+    expect(molochBalance).toEqual("1099");
+  }, 120000);
   // rage quit
   // abort
   // failed vote

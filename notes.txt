@@ -2,6 +2,7 @@ Minutes
 pre estimate - 05/09 - 360 (6 hours) 
 05/09 - 315 (5.25 hours) 
 Lindas again 6 hours
+2 hours
 
 
 -- Constructor

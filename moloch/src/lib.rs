@@ -79,8 +79,6 @@ pub struct Proposal {
     proposer: AccountId,
     /// The applicant who wishes to become a member - this will be used for withdrawls
     applicant: AccountId,
-    /// Whether the applicant has sent a proposals tribute
-    applicant_has_tributed: bool,
     /// The number of shares the applicant is requesting
     shares_requested: u128,
     /// The period in which voting can start for this proposal
@@ -339,7 +337,6 @@ impl Moloch {
             details: details,
             max_total_shares_at_yes_vote: 0,
             votes_by_member: HashMap::new(),
-            applicant_has_tributed: false,
         };
         self.proposal_queue.push(&proposal);
         let proposal_index = self.proposal_queue.len().saturating_sub(1);
@@ -468,6 +465,7 @@ impl Moloch {
     /// will fail. This means that members voting yes will only be obligated to contribute at most
     /// 3x what they were willing to contribute their share of the proposal cost, if 2/3 of the
     /// shares ragequit
+    #[payable]
     pub fn process_proposal(&mut self, proposal_index: U64) -> Promise {
         let _proposal_index = u64::from(proposal_index);
         assert!(
@@ -525,7 +523,7 @@ impl Moloch {
             passed = false
         };
 
-        if passed == true && !proposal.aborted && proposal.applicant_has_tributed {
+        if passed == true && !proposal.aborted {
             proposal.did_pass = true;
             let member_exists = match self.members.get(&proposal.applicant) {
                 Some(_) => true,
@@ -574,7 +572,7 @@ impl Moloch {
             // TODO: Orginal contract asserts this is successfull
 
             // Proposal failed and applicant submitted
-        } else if proposal.applicant_has_tributed {
+        } else {
             // Return proposal token_tribute
             self.escrow
                 .deposit(proposal.applicant.clone(), proposal.token_tribute);
@@ -606,7 +604,7 @@ impl Moloch {
             U128::from(self.processing_reward),
             Some("pay out processing reward for processing proposal".to_string()),
             &self.token_id,
-            0,
+            1,
             prepaid_gas / 2,
         )
     }
@@ -905,8 +903,6 @@ mod tests {
         proposer: AccountId,
         /// The applicant who wishes to become a member - this will be used for withdrawls
         applicant: AccountId,
-        /// Whether the applicant has sent a proposals tribute
-        applicant_has_tributed: bool,
         /// The number of shares the applicant is requesting
         shares_requested: u128,
         /// The period in which voting can start for this proposal
@@ -947,17 +943,11 @@ mod tests {
                 details: "".to_string(),
                 max_total_shares_at_yes_vote: 0,
                 votes_by_member: HashMap::new(),
-                applicant_has_tributed: false,
             }
         }
 
         fn processed(&mut self, processed: bool) -> &mut Self {
             self.processed = processed;
-            self
-        }
-
-        fn applicant_has_tributed(&mut self, applicant_has_tributed: bool) -> &mut Self {
-            self.applicant_has_tributed = applicant_has_tributed;
             self
         }
 
@@ -1017,7 +1007,6 @@ mod tests {
                 details: self.details.to_string(),
                 max_total_shares_at_yes_vote: self.max_total_shares_at_yes_vote,
                 votes_by_member: votes_by_member,
-                applicant_has_tributed: self.applicant_has_tributed,
             }
         }
     }
@@ -1191,7 +1180,6 @@ mod tests {
             details: "".to_string(),
             max_total_shares_at_yes_vote: 0,
             votes_by_member: HashMap::new(),
-            applicant_has_tributed: false,
         };
         let logs = get_logs();
 
@@ -1233,7 +1221,6 @@ mod tests {
             details: "".to_string(),
             max_total_shares_at_yes_vote: 0,
             votes_by_member: HashMap::new(),
-            applicant_has_tributed: false,
         };
         assert_eq!(proposal.unwrap(), expected_proposal);
         assert_eq!(contract.total_shares_requested, 30);
@@ -1535,10 +1522,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let member = MockMember::new().build();
-        let proposal = MockProposal::new()
-            .yes_vote(&member)
-            .applicant_has_tributed(true)
-            .build();
+        let proposal = MockProposal::new().yes_vote(&member).build();
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
@@ -1587,7 +1571,6 @@ mod tests {
             .applicant(alice())
             .yes_vote(&member)
             .shares_requested(15)
-            .applicant_has_tributed(true)
             .build();
 
         let existing_member = MockMember::new().shares(7).delegate_key(alice()).build();
@@ -1627,7 +1610,6 @@ mod tests {
             .applicant(alice())
             .yes_vote(&member)
             .shares_requested(15)
-            .applicant_has_tributed(true)
             .build();
 
         let mut contract = MockMoloch::new().add_proposal(proposal).build();
@@ -1675,7 +1657,6 @@ mod tests {
             .applicant(alice())
             .yes_vote(&member)
             .shares_requested(15)
-            .applicant_has_tributed(true)
             .build();
 
         let mut contract = MockMoloch::new()
@@ -1739,55 +1720,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let member = MockMember::new().build();
-        let proposal = MockProposal::new()
-            .no_vote(&member)
-            .applicant_has_tributed(true)
-            .build();
-        let mut contract = MockMoloch::new()
-            .add_proposal(proposal)
-            .add_member(member)
-            .build();
-        let proposal = contract.proposal_queue.get(0).unwrap();
-        assert_eq!(proposal.processed, false, "Proposal has been processed");
-        assert_eq!(
-            contract.total_shares_requested, proposal.shares_requested,
-            "Total shares requested has not been set correctly",
-        );
-        let mut context_builder = get_context_builder(false);
-        let context = context_builder
-            .block_timestamp(
-                contract.summoning_time
-                    + (contract.period_duration
-                        * (contract.voting_period_length + contract.grace_period_length + 1)),
-            )
-            .build();
-        testing_env!(context);
-        contract.process_proposal(0.into());
-
-        let proposal = contract.proposal_queue.get(0).unwrap();
-        assert_eq!(proposal.processed, true, "Proposal has not been processed");
-        assert_eq!(
-            contract.total_shares_requested, 0,
-            "Number of requested shares has not been subtracted",
-        );
-        let member = contract.members.get(&robert()).unwrap();
-        assert_eq!(
-            member.shares, 10,
-            "Member does not have the correct number not shares"
-        );
-        assert_eq!(contract.total_shares, 11, "Total shares is not correct");
-    }
-
-    // Test failed proposal no tribute sent
-    #[test]
-    fn process_proposal_failed_no_tribute_sent() {
-        let context = get_context(false);
-        testing_env!(context);
-        let member = MockMember::new().build();
-        let proposal = MockProposal::new()
-            .yes_vote(&member)
-            .applicant_has_tributed(false)
-            .build();
+        let proposal = MockProposal::new().no_vote(&member).build();
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
@@ -1829,11 +1762,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let member = MockMember::new().build();
-        let proposal = MockProposal::new()
-            .yes_vote(&member)
-            .applicant_has_tributed(true)
-            .aborted(true)
-            .build();
+        let proposal = MockProposal::new().yes_vote(&member).aborted(true).build();
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
