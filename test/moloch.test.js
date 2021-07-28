@@ -285,6 +285,25 @@ describe("Moloch test", () => {
     );
     expect(molochBalance).toEqual("1099");
   }, 120000);
+
+	test("Rage quit", async () => {
+    await alice.functionCall({
+      contractId: contractAccountId,
+      methodName: "rage_quit",
+      args: {
+        shares_to_burn: "5" // 5 of 11 total
+      },
+      gas: 300000000000000
+    });
+		
+		// check the correct amount is withdrawn and sent alice
+    const bankBalance = await getBankBalance(masterAccount, contractAccountId);
+    expect(bankBalance).toEqual("4.54");
+
+
+
+	})
+
   // rage quit
   // abort
   // failed vote
