@@ -26,3 +26,37 @@ Todos:
 - Add escrow withdrawl
 - Add storage and simulation test
 - Add a couple more end to end tests
+
+---- old
+Minutes
+pre estimate - 05/09 - 360 (6 hours) 
+05/09 - 315 (5.25 hours) 
+Lindas again 6 hours
+07/01 8 hours
+07/21 35 hours
+07/26 1 hour
+
+
+-- Constructor
+- Test cases
+- Test every assert in the constructor
+- Test that the contract is initialized properly
+
+-- Submit Proposal
+- Test assert cases
+- Test transfer goes to contract account
+- Test empty queue
+- Test queue with all proposals having started
+- Make sure proposal is added to the queue
+
+Questions:
+Do we need a getter for proposals?
+
+Todos:
+- Add escrow asserts in tests
+- Add escrow withdrawl
+- Add storage and simulation test
+- Add a couple more end to end tests
+
+
+
