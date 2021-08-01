@@ -3,10 +3,13 @@ extern crate near_sdk;
 extern crate serde;
 
 use near_contract_standards::fungible_token::core_impl::ext_fungible_token;
+use near_contract_standards::storage_management::StorageBalance;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::collections::{UnorderedMap, Vector};
+use near_sdk::collections::{LookupMap, UnorderedMap, Vector};
 use near_sdk::json_types::{U128, U64};
-use near_sdk::{env, ext_contract, near_bindgen, setup_alloc, AccountId, PanicOnDefault, Promise};
+use near_sdk::{
+    env, ext_contract, near_bindgen, setup_alloc, AccountId, Balance, PanicOnDefault, Promise,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +27,13 @@ const MAX_GRACE_PERIOD_LENGTH: u64 = 10000000000000000000; // maximum length of 
 const MAX_DILUTION_BOUND: u128 = 10000000000000000000; // maximum dilution bound
 
 setup_alloc!();
+
+#[derive(BorshDeserialize, BorshSerialize, Default, PartialEq, Debug, Serialize, Deserialize)]
+pub struct UserStorageBalance {
+    total: u128,
+    available: u128,
+}
+
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Moloch {
@@ -49,6 +59,10 @@ pub struct Moloch {
     members: UnorderedMap<AccountId, Member>,
     /// Members of the DAO related to their delegate key
     members_by_delegate_key: UnorderedMap<AccountId, AccountId>,
+    /// User storage accounts
+    user_storage_accounts: LookupMap<AccountId, UserStorageBalance>,
+    /// The mininum amount of storgage needed to interact with this contract
+    min_account_storage_usage: u64,
     /// Total shares across all members
     total_shares: u128,
     /// A data structure that handles the guild balance and member withdraws
@@ -230,7 +244,7 @@ impl Moloch {
         // log summon
         env::log(format!("Summon complete by {} with 1 share!", summoner).as_bytes());
 
-        Self {
+        let mut this = Self {
             period_duration: _period_duration,
             voting_period_length: _voting_period_length,
             grace_period_length: _grace_period_length,
@@ -242,12 +256,68 @@ impl Moloch {
             summoning_time: env::block_timestamp(),
             members: members,
             members_by_delegate_key: members_by_delegate_key,
+            user_storage_accounts: LookupMap::new(b"user_accounts_storage".to_vec()),
+            min_account_storage_usage: 0,
             total_shares: 1,
             bank: bank,
             escrow: escrow,
             total_shares_requested: 0,
             proposal_queue: Vector::new(b"proposal_queue".to_vec()),
+        };
+        this.measure_min_account_storage_usage();
+        this
+    }
+
+    /// A function that determines the minimum storage
+    /// needed to accept fungible token transers.
+    // TODO: Determine if this is a suffcient minimum
+    fn measure_min_account_storage_usage(&mut self) {
+        let initial_storage_usage = env::storage_usage();
+        // Register in escrow,
+        let tmp_account_id = "a".repeat(64);
+        self.escrow.deposit(tmp_account_id.to_string(), 1u128);
+        self.min_account_storage_usage = env::storage_usage() - initial_storage_usage;
+        self.escrow.withdraw(tmp_account_id.to_string(), 1u128);
+    }
+
+    // TODO this shouldn't be callbabel
+    #[private]
+    fn update_available_storage(
+        &mut self,
+        account_id: AccountId,
+        initial_storage: u64,
+        storage_used: u64,
+    ) {
+        let user_storage_opt = self.user_storage_accounts.get(&account_id);
+        if user_storage_opt.is_none() {
+            env::panic(format!("Account {} has not registered any storage", account_id).as_bytes());
         }
+
+        let mut user_storage = user_storage_opt.unwrap();
+        println!("initial {}", initial_storage);
+        println!("used {}", storage_used);
+        println!("total {}", user_storage.total);
+        if storage_used > initial_storage {
+            let x = (env::storage_byte_cost() * Balance::from(storage_used - initial_storage));
+            println!("hello {}", x);
+            println!("here");
+            user_storage.available = user_storage
+                .available
+                .checked_sub(
+                    env::storage_byte_cost() * Balance::from(storage_used - initial_storage),
+                )
+                .expect(format!("Insufficient deposit to pay for storage {}", account_id).as_str());
+        } else {
+            let mut additional_storage = user_storage.available
+                + env::storage_byte_cost() * Balance::from(initial_storage - storage_used);
+            if (user_storage.available + additional_storage) > user_storage.total {
+                additional_storage = user_storage.total - user_storage.available;
+            }
+            user_storage.available += additional_storage
+        };
+
+        self.user_storage_accounts
+            .insert(&account_id, &user_storage);
     }
 
     /// At any time members can submit a new proposal using their delegate_key
@@ -275,6 +345,7 @@ impl Moloch {
         shares_requested: U128,
         details: String,
     ) {
+        let initial_storage_usage = env::storage_usage();
         // 0. delegate check
         self.only_delegate();
         let _token_tribute = u128::from(token_tribute);
@@ -340,9 +411,14 @@ impl Moloch {
         };
         self.proposal_queue.push(&proposal);
         let proposal_index = self.proposal_queue.len().saturating_sub(1);
-
         // 6. Log
         env::log(format!("Proposal submitted! proposal_index: {}, sender: {}, member_address: {}, applicant: {}, token_tribute: {}, shares_requested: {}", proposal_index, env::predecessor_account_id(), proposal.proposer, proposal.applicant, _token_tribute, _shares_requested).as_bytes());
+
+        self.update_available_storage(
+            env::predecessor_account_id(),
+            initial_storage_usage,
+            env::storage_usage(),
+        );
     }
 
     /// While a proposal is in its voting period, members can submit their vote using their
@@ -357,6 +433,7 @@ impl Moloch {
     /// 4. If the member voted Yes and this is now the most total shares that the Guild had during
     ///    any Yes vote, update the proposal max_total_shares_at_yes_vote.
     pub fn submit_vote(&mut self, proposal_index: U64, uint_vote: u8) {
+        let initial_storage_usage = env::storage_usage();
         let proposal_index = u64::from(proposal_index);
         // 0. delegate check
         self.only_delegate();
@@ -431,7 +508,12 @@ impl Moloch {
                 uint_vote,
             )
             .as_bytes(),
-        )
+        );
+        self.update_available_storage(
+            env::predecessor_account_id(),
+            initial_storage_usage,
+            env::storage_usage(),
+        );
     }
 
     /// After a proposal has completed its grace period, anyone can call process_proposal to tally
@@ -467,6 +549,7 @@ impl Moloch {
     /// shares ragequit
     #[payable]
     pub fn process_proposal(&mut self, proposal_index: U64) -> Promise {
+        let initial_storage_usage = env::storage_usage();
         let _proposal_index = u64::from(proposal_index);
         assert!(
             _proposal_index < self.proposal_queue.len(),
@@ -597,6 +680,12 @@ impl Moloch {
             .replace(proposal_index.into(), &proposal);
         env::log(message.as_bytes());
 
+        self.update_available_storage(
+            env::predecessor_account_id(),
+            initial_storage_usage,
+            env::storage_usage(),
+        );
+
         // Pay processing reward
         let prepaid_gas = env::prepaid_gas();
         ext_fungible_token::ft_transfer(
@@ -618,6 +707,7 @@ impl Moloch {
     /// 3. Instruct the guild bank to send the member their proportional amount of the approved
     ///    token
     pub fn rage_quit(&mut self, shares_to_burn: U128) -> Promise {
+        let initial_storage_usage = env::storage_usage();
         let _shares_to_burn = u128::from(shares_to_burn);
 
         // only_member modifier
@@ -651,6 +741,11 @@ impl Moloch {
             )
             .as_bytes(),
         );
+        self.update_available_storage(
+            env::predecessor_account_id(),
+            initial_storage_usage,
+            env::storage_usage(),
+        );
 
         // TODO: Does the above get rolled back if this fails
         self.bank.withdraw(
@@ -662,6 +757,7 @@ impl Moloch {
 
     /// TODO: Add documentation
     pub fn abort(&mut self, proposal_index: U64) {
+        let initial_storage_usage = env::storage_usage();
         let _proposal_index = u64::from(proposal_index);
         // Check if proposal index is within the length
         assert!(
@@ -697,6 +793,12 @@ impl Moloch {
         // return deposit
         self.escrow
             .deposit(proposal.proposer.clone(), self.processing_reward);
+
+        self.update_available_storage(
+            env::predecessor_account_id(),
+            initial_storage_usage,
+            env::storage_usage(),
+        );
     }
 
     /// By default when a member is accepted their delegateKey is set to their member accountId. At
@@ -708,6 +810,7 @@ impl Moloch {
     ///    members_by_delegate_key mapping.
     /// 3. Updates the member delegate_key
     pub fn update_delegate_key(&mut self, new_delegate_key: AccountId) {
+        let initial_storage_usage = env::storage_usage();
         self.only_member();
         // Delegate key cannot be 0
         assert!(
@@ -756,6 +859,11 @@ impl Moloch {
                 sender, member.delegate_key,
             )
             .as_bytes(),
+        );
+        self.update_available_storage(
+            env::predecessor_account_id(),
+            initial_storage_usage,
+            env::storage_usage(),
         );
     }
 
@@ -1026,6 +1134,7 @@ mod tests {
         total_shares: u128,
         members: UnorderedMap<AccountId, Member>,
         members_by_delegate_key: UnorderedMap<AccountId, AccountId>,
+        user_storage_accounts: UnorderedMap<AccountId, UserStorageBalance>,
         user_balances: UnorderedMap<AccountId, u128>,
     }
 
@@ -1049,6 +1158,7 @@ mod tests {
                 members_by_delegate_key: UnorderedMap::new(
                     b"mock_members_by_delegate_key".to_vec(),
                 ),
+                user_storage_accounts: UnorderedMap::new(b"mock_user_storage_account".to_vec()),
                 user_balances: UnorderedMap::new(b"mock_user_balances".to_vec()),
             }
         }
@@ -1074,6 +1184,18 @@ mod tests {
                 .insert(&member.delegate_key, &member.delegate_key);
             self.members.insert(&member.delegate_key, &member);
             self.total_shares += member.shares;
+            self.register_user(member.delegate_key, 5);
+            self
+        }
+
+        fn register_user(&mut self, account_id: AccountId, amount: u128) -> &mut Self {
+            self.user_storage_accounts.insert(
+                &account_id,
+                &UserStorageBalance {
+                    total: amount,
+                    available: amount,
+                },
+            );
             self
         }
 
@@ -1106,6 +1228,9 @@ mod tests {
             moloch.total_shares_requested += self.total_shares_requested;
             moloch.total_shares += self.total_shares;
             moloch.members.extend(self.members.iter());
+            moloch
+                .user_storage_accounts
+                .extend(self.user_storage_accounts.iter());
             moloch
                 .members_by_delegate_key
                 .extend(self.members_by_delegate_key.iter());
@@ -1148,6 +1273,10 @@ mod tests {
         "fdai.testnet".to_string()
     }
 
+    fn storage_deposit() -> u128 {
+        9000000000000000000000
+    }
+
     /// Tests for submit propposal
     #[test]
     fn submit_proposal() {
@@ -1156,6 +1285,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_escrow_deposit(robert(), 13)
             .add_escrow_deposit(bob(), 101)
+            .register_user(bob(), storage_deposit())
             .build();
         let promise = contract.submit_proposal(robert(), 12.into(), 10.into(), "".to_string());
 
@@ -1199,6 +1329,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_escrow_deposit(bob(), 200)
             .add_escrow_deposit(robert(), 32)
+            .register_user(bob(), storage_deposit())
             .build();
         contract.submit_proposal(robert(), 12.into(), 10.into(), "".to_string());
 
@@ -1255,6 +1386,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_escrow_deposit(bob(), 100)
             .add_escrow_deposit(robert(), 10)
+            .register_user(bob(), storage_deposit())
             .build();
         contract.submit_proposal(
             robert(),
@@ -1280,7 +1412,10 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let proposal = MockProposal::new().build();
-        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .register_user(bob(), storage_deposit())
+            .build();
 
         let mut context_builder = get_context_builder(false);
         let context = context_builder
@@ -1308,7 +1443,10 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let proposal = MockProposal::new().build();
-        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .register_user(bob(), storage_deposit())
+            .build();
 
         let mut context_builder = get_context_builder(false);
         let context = context_builder
@@ -1344,6 +1482,9 @@ mod tests {
             .add_proposal(proposal_two)
             .add_member(robert_member_info)
             .add_member(alice_member_info)
+            .register_user(bob(), storage_deposit())
+            .register_user(alice(), storage_deposit())
+            .register_user(robert(), storage_deposit())
             .build();
 
         // Make sure two periods pass so each proposal can
@@ -1468,7 +1609,10 @@ mod tests {
 
         let mut context_builder = get_context_builder(false);
         let proposal = MockProposal::new().build();
-        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .register_user(bob(), storage_deposit())
+            .build();
         let block_time = contract.summoning_time + contract.period_duration;
         let context = context_builder.block_timestamp(block_time.into()).build();
         testing_env!(context);
@@ -1526,6 +1670,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
+            .register_user(bob(), storage_deposit())
             .build();
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.processed, false, "Proposal has been processed");
@@ -1577,6 +1722,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(existing_member)
+            .register_user(bob(), storage_deposit())
             .build();
         let mut context_builder = get_context_builder(false);
         let context = context_builder
@@ -1612,7 +1758,10 @@ mod tests {
             .shares_requested(15)
             .build();
 
-        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .register_user(bob(), storage_deposit())
+            .build();
         let mut context_builder = get_context_builder(false);
         let context = context_builder
             .block_timestamp(
@@ -1663,6 +1812,7 @@ mod tests {
             .add_proposal(proposal)
             .add_member(member)
             .update_member_delegate_key(&alice(), &robert())
+            .register_user(bob(), storage_deposit())
             .build();
         let mut context_builder = get_context_builder(false);
         let context = context_builder
@@ -1724,6 +1874,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
+            .register_user(bob(), storage_deposit())
             .build();
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.processed, false, "Proposal has been processed");
@@ -1766,6 +1917,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
+            .register_user(bob(), storage_deposit())
             .build();
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.processed, false, "Proposal has been processed");
@@ -1964,7 +2116,10 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let proposal = MockProposal::new().applicant(robert()).build();
-        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let mut contract = MockMoloch::new()
+            .add_proposal(proposal)
+            .register_user(robert(), storage_deposit())
+            .build();
         let mut context_builder = get_context_builder(false);
         testing_env!(context_builder
             .predecessor_account_id(robert().try_into().unwrap())
@@ -2046,7 +2201,9 @@ mod tests {
     fn update_delegate_key() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = MockMoloch::new().build();
+        let mut contract = MockMoloch::new()
+            .register_user(bob(), storage_deposit())
+            .build();
         contract.update_delegate_key("soda".to_string());
         let old_key = contract.members_by_delegate_key.get(&bob()).unwrap();
         assert_eq!(
@@ -2107,7 +2264,10 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let member = MockMember::new().build();
-        let mut contract = MockMoloch::new().add_member(member).build();
+        let mut contract = MockMoloch::new()
+            .add_member(member)
+            .register_user(bob(), storage_deposit())
+            .build();
         let mut context_builder = get_context_builder(false);
         contract.update_delegate_key("soda".to_string());
         let mut context_builder = get_context_builder(false);

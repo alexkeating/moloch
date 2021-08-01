@@ -42,6 +42,9 @@ impl ProposalEscrow {
             ),
         };
         self.user_balances.insert(&account_id, &updated_balance);
+        if updated_balance == 0 {
+            self.user_balances.remove(&account_id);
+        };
         updated_balance
     }
 
