@@ -36,25 +36,32 @@ impl StorageManagement for Moloch {
             total: 0,
             available: 0,
         };
+        let min_balance = self.storage_balance_bounds().min.0;
         let user_storage_opt = self.user_storage_accounts.get(&account_id);
         if user_storage_opt.is_some() {
             user_storage = self.user_storage_accounts.get(&account_id).unwrap();
+        } else {
+            println!("Min balance {}", min_balance);
+            if amount < min_balance {
+                env::panic(b"The attached deposit is less than the minimum storage balance");
+            }
         };
         if registration_only.is_none() || registration_only.unwrap() == false {
+            let mut available = user_storage.available + amount;
+            if user_storage_opt.is_none() {
+                available = amount - u128::from(min_balance);
+            }
+
             self.user_storage_accounts.insert(
                 &account_id,
                 &UserStorageBalance {
                     total: user_storage.total + amount,
-                    available: user_storage.available + amount,
+                    available: available,
                 },
             );
             return self.storage_balance_of(valid_account_id).unwrap();
         }
 
-        let min_balance = self.storage_balance_bounds().min.0;
-        if amount < min_balance {
-            env::panic(b"The attached deposit is less than the minimum storage balance");
-        }
         // If account already registered refund the full amount
         if user_storage_opt.is_some() {
             env::log("The account is already registered, refunding the deposit".as_bytes());
@@ -194,6 +201,33 @@ mod tests {
     // If registration only and already registered then refund the full amount (sim)
     // If registration and exact amount then refund nothing
     //
+    // Default account id
+    // passed in account id
+    //  registration none
+    #[test]
+    fn storage_deposit_registration_none() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().build();
+        testing_env!(context_builder
+            .attached_deposit(60000000000000000000)
+            .build());
+        let storage_balance = contract.storage_deposit(Some(bob().try_into().unwrap()), None);
+        assert_eq!(
+            u128::from(storage_balance.total),
+            60000000000000000000,
+            "Total deposit is not correct"
+        );
+        assert_eq!(
+            u128::from(storage_balance.available),
+            10000000000000000000,
+            "Availble deposit is not correct"
+        );
+    }
+    //  registration false exists
+    //  registration exists
+    //  registration less than min
+    //  regostratopm more than the amount
     // storage_deposit
 
     // If no amount than the full amount is refunded
