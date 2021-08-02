@@ -41,9 +41,8 @@ impl StorageManagement for Moloch {
         if user_storage_opt.is_some() {
             user_storage = self.user_storage_accounts.get(&account_id).unwrap();
         } else {
-            println!("Min balance {}", min_balance);
             if amount < min_balance {
-                env::panic(b"The attached deposit is less than the minimum storage balance");
+                env::panic(b"The attached deposit is less than the minimum storage balance bounds");
             }
         };
         if registration_only.is_none() || registration_only.unwrap() == false {
@@ -75,8 +74,8 @@ impl StorageManagement for Moloch {
         self.user_storage_accounts.insert(
             &account_id,
             &UserStorageBalance {
-                total: amount,
-                available: amount - min_balance,
+                total: min_balance,
+                available: 0,
             },
         );
 
@@ -90,6 +89,7 @@ impl StorageManagement for Moloch {
     // Send deposit, if amount is greater than deposit panic
     // if not registered panic
     fn storage_withdraw(&mut self, amount: Option<U128>) -> StorageBalance {
+        assert_one_yocto();
         let predecessor_account_id = env::predecessor_account_id();
         let user_account = self.user_storage_accounts.get(&predecessor_account_id);
         // If not registered panic
@@ -122,12 +122,13 @@ impl StorageManagement for Moloch {
         let amount = amount.unwrap();
         assert!(
             storage_account.available >= amount.into(),
-            "Requested amount to withdraw is greater than the avialable amount"
+            "Requested amount to withdraw is greater than the available amount to withdraw"
         );
         Promise::new(predecessor_account_id.to_string()).transfer(amount.into());
         let available = u128::from(storage_account.available) - u128::from(amount);
+        let total = u128::from(storage_account.total) - u128::from(amount);
         let new_storage_balance = StorageBalance {
-            total: storage_account.total.into(),
+            total: total.into(),
             available: available.into(),
         };
         self.user_storage_accounts.insert(
@@ -203,6 +204,28 @@ mod tests {
     //
     // Default account id
     // passed in account id
+
+    // storage_deposit
+    #[test]
+    fn storage_deposit_registration_default() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().build();
+        testing_env!(context_builder
+            .attached_deposit(60000000000000000000)
+            .build());
+        contract.storage_deposit((None), Some(false));
+        let storage_balance = contract.user_storage_accounts.get(&bob()).unwrap();
+        assert_eq!(
+            storage_balance.total, 60000000000000000000,
+            "Total deposit is not correct"
+        );
+        assert_eq!(
+            storage_balance.available, 10000000000000000000,
+            "Availble deposit is not correct"
+        );
+    }
+
     //  registration none
     #[test]
     fn storage_deposit_registration_none() {
@@ -224,17 +247,180 @@ mod tests {
             "Availble deposit is not correct"
         );
     }
-    //  registration false exists
-    //  registration exists
-    //  registration less than min
-    //  regostratopm more than the amount
-    // storage_deposit
 
-    // If no amount than the full amount is refunded
-    // If amount specified is greater than available amount panic
-    // If amount specified is okay then withdraw that amount
-    //
+    //  registration false exists
+    #[test]
+    fn storage_deposit_registration_false_exists() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new()
+            .register_user(bob(), 50000000000000000000, 0)
+            .build();
+        testing_env!(context_builder.attached_deposit(5).build());
+        let storage_balance =
+            contract.storage_deposit(Some(bob().try_into().unwrap()), Some(false));
+        assert_eq!(
+            u128::from(storage_balance.total),
+            50000000000000000005,
+            "Total deposit is not correct"
+        );
+        assert_eq!(
+            u128::from(storage_balance.available),
+            5,
+            "Availble deposit is not correct"
+        );
+    }
+
+    //  registration exists
+    #[test]
+    fn storage_deposit_registration_exists() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().register_user(bob(), 5, 5).build();
+        testing_env!(context_builder
+            .attached_deposit(50000000000000000000)
+            .build());
+        let storage_balance = contract.storage_deposit(Some(bob().try_into().unwrap()), Some(true));
+        assert_eq!(
+            u128::from(storage_balance.total),
+            5,
+            "Total deposit is not correct"
+        );
+        assert_eq!(
+            u128::from(storage_balance.available),
+            5,
+            "Availble deposit is not correct"
+        );
+    }
+
+    //  registration less than min
+    #[test]
+    #[should_panic(
+        expected = r#"The attached deposit is less than the minimum storage balance bounds"#
+    )]
+    fn storage_deposit_registration_less_than_min() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().build();
+        testing_env!(context_builder.attached_deposit(5).build());
+        let storage_balance = contract.storage_deposit(Some(bob().try_into().unwrap()), Some(true));
+    }
+
+    //  registration more than the amount
+    #[test]
+    fn storage_deposit_registration_more_than_minimum() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().build();
+        testing_env!(context_builder
+            .attached_deposit(60000000000000000000)
+            .build());
+        contract.storage_deposit(None, Some(true));
+        let storage_balance = contract.user_storage_accounts.get(&bob()).unwrap();
+        assert_eq!(
+            storage_balance.total, 50000000000000000000,
+            "Total deposit is not correct"
+        );
+        assert_eq!(
+            storage_balance.available, 0,
+            "Availble deposit is not correct"
+        );
+    }
+
     // storage_withdraw
+    //
+    // If no amount than the full amount is refunded
+    #[test]
+    fn storage_withdraw_full_refund() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().register_user(bob(), 10, 5).build();
+        testing_env!(context_builder.attached_deposit(1).build());
+        let new_balance = contract.storage_withdraw(None);
+        let storage_balance = contract.user_storage_accounts.get(&bob()).unwrap();
+        assert_eq!(
+            u128::from(new_balance.total),
+            5,
+            "Total storage was reduced in excess"
+        );
+        assert_eq!(
+            u128::from(new_balance.available),
+            0,
+            "Available storage is incorrect"
+        );
+        assert_eq!(
+            storage_balance.total, 5,
+            "Total storage interally is incorrect"
+        );
+        assert_eq!(
+            storage_balance.available, 0,
+            "Available storage internally is incorrect"
+        );
+    }
+
+    // If amount specified is okay then withdraw that amount
+    #[test]
+    fn storage_withdraw_reasonable_amount() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().register_user(bob(), 10, 5).build();
+        testing_env!(context_builder.attached_deposit(1).build());
+        let new_balance = contract.storage_withdraw(Some(3.into()));
+        let storage_balance = contract.user_storage_accounts.get(&bob()).unwrap();
+        assert_eq!(
+            u128::from(new_balance.total),
+            7,
+            "Total storage was reduced in excess"
+        );
+        assert_eq!(
+            u128::from(new_balance.available),
+            2,
+            "Available storage is incorrect"
+        );
+        assert_eq!(
+            storage_balance.total, 7,
+            "Total storage interally is incorrect"
+        );
+        assert_eq!(
+            storage_balance.available, 2,
+            "Available storage internally is incorrect"
+        );
+    }
+
+    // If amount specified is greater than available amount panic
+    #[test]
+    #[should_panic(
+        expected = r#"Requested amount to withdraw is greater than the available amount to withdraw"#
+    )]
+    fn storage_withdraw_greater_than_available() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().register_user(bob(), 10, 5).build();
+        testing_env!(context_builder.attached_deposit(1).build());
+        contract.storage_withdraw(Some(10.into()));
+    }
+
+    // If not registered panic
+    #[test]
+    #[should_panic(expected = r#"The account bob.near is not registered"#)]
+    fn storage_withdraw_not_registered() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().build();
+        testing_env!(context_builder.attached_deposit(1).build());
+        contract.storage_withdraw(Some(10.into()));
+    }
+
+    // Require 1 yoct_neaer
+    #[test]
+    #[should_panic(expected = r#"Requires attached deposit of exactly 1 yoctoNEAR"#)]
+    fn storage_withdraw_no_yocto() {
+        let context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().register_user(bob(), 5, 1).build();
+        testing_env!(context_builder.build());
+        contract.storage_withdraw(Some(10.into()));
+    }
 
     // If account is not registered then the function must return false
     #[test]
@@ -251,7 +437,7 @@ mod tests {
     fn storage_unregisted_none() {
         let mut context_builder = get_context_builder(false);
         testing_env!(context_builder.build());
-        let mut contract = MockMoloch::new().register_user(bob(), 0).build();
+        let mut contract = MockMoloch::new().register_user(bob(), 5, 0).build();
         testing_env!(context_builder.attached_deposit(1).build());
         let unregistered = contract.storage_unregister(None);
         assert_eq!(unregistered, true, "Did not register without force");
@@ -263,7 +449,7 @@ mod tests {
     fn storage_unregisted_with_force() {
         let mut context_builder = get_context_builder(false);
         testing_env!(context_builder.build());
-        let mut contract = MockMoloch::new().register_user(bob(), 5).build();
+        let mut contract = MockMoloch::new().register_user(bob(), 5, 5).build();
         testing_env!(context_builder.attached_deposit(1).build());
         let unregistered = contract.storage_unregister(Some(true));
         assert_eq!(unregistered, true, "User was not unregistered");
@@ -279,7 +465,7 @@ mod tests {
     fn storage_unregisted_no_force() {
         let mut context_builder = get_context_builder(false);
         testing_env!(context_builder.build());
-        let mut contract = MockMoloch::new().register_user(bob(), 5).build();
+        let mut contract = MockMoloch::new().register_user(bob(), 5, 5).build();
         testing_env!(context_builder.attached_deposit(1).build());
         contract.storage_unregister(Some(false));
     }
@@ -306,7 +492,7 @@ mod tests {
     fn storage_balance_of_exists() {
         let context = get_context(false);
         testing_env!(context);
-        let contract = MockMoloch::new().register_user(bob(), 5).build();
+        let contract = MockMoloch::new().register_user(bob(), 5, 5).build();
         let balanace = contract
             .storage_balance_of(bob().try_into().unwrap())
             .unwrap();

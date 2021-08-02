@@ -1220,16 +1220,21 @@ pub mod mocks {
                 .insert(&member.delegate_key, &member.delegate_key);
             self.members.insert(&member.delegate_key, &member);
             self.total_shares += member.shares;
-            self.register_user(member.delegate_key, 5);
+            self.register_user(member.delegate_key, 10, 5);
             self
         }
 
-        pub fn register_user(&mut self, account_id: AccountId, amount: u128) -> &mut Self {
+        pub fn register_user(
+            &mut self,
+            account_id: AccountId,
+            total: u128,
+            available: u128,
+        ) -> &mut Self {
             self.user_storage_accounts.insert(
                 &account_id,
                 &UserStorageBalance {
-                    total: amount,
-                    available: amount,
+                    total: total,
+                    available: available,
                 },
             );
             self
@@ -1304,7 +1309,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_escrow_deposit(robert(), 13)
             .add_escrow_deposit(bob(), 101)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let promise = contract.submit_proposal(robert(), 12.into(), 10.into(), "".to_string());
 
@@ -1348,7 +1353,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_escrow_deposit(bob(), 200)
             .add_escrow_deposit(robert(), 32)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         contract.submit_proposal(robert(), 12.into(), 10.into(), "".to_string());
 
@@ -1405,7 +1410,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_escrow_deposit(bob(), 100)
             .add_escrow_deposit(robert(), 10)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         contract.submit_proposal(
             robert(),
@@ -1433,7 +1438,7 @@ mod tests {
         let proposal = MockProposal::new().build();
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
 
         let mut context_builder = get_context_builder(false);
@@ -1464,7 +1469,7 @@ mod tests {
         let proposal = MockProposal::new().build();
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
 
         let mut context_builder = get_context_builder(false);
@@ -1501,9 +1506,9 @@ mod tests {
             .add_proposal(proposal_two)
             .add_member(robert_member_info)
             .add_member(alice_member_info)
-            .register_user(bob(), storage_deposit())
-            .register_user(alice(), storage_deposit())
-            .register_user(robert(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
+            .register_user(alice(), storage_deposit(), storage_deposit())
+            .register_user(robert(), storage_deposit(), storage_deposit())
             .build();
 
         // Make sure two periods pass so each proposal can
@@ -1630,7 +1635,7 @@ mod tests {
         let proposal = MockProposal::new().build();
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let block_time = contract.summoning_time + contract.period_duration;
         let context = context_builder.block_timestamp(block_time.into()).build();
@@ -1689,7 +1694,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.processed, false, "Proposal has been processed");
@@ -1741,7 +1746,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(existing_member)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let mut context_builder = get_context_builder(false);
         let context = context_builder
@@ -1779,7 +1784,7 @@ mod tests {
 
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let mut context_builder = get_context_builder(false);
         let context = context_builder
@@ -1831,7 +1836,7 @@ mod tests {
             .add_proposal(proposal)
             .add_member(member)
             .update_member_delegate_key(&alice(), &robert())
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let mut context_builder = get_context_builder(false);
         let context = context_builder
@@ -1893,7 +1898,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.processed, false, "Proposal has been processed");
@@ -1936,7 +1941,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.processed, false, "Proposal has been processed");
@@ -2137,7 +2142,7 @@ mod tests {
         let proposal = MockProposal::new().applicant(robert()).build();
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
-            .register_user(robert(), storage_deposit())
+            .register_user(robert(), storage_deposit(), storage_deposit())
             .build();
         let mut context_builder = get_context_builder(false);
         testing_env!(context_builder
@@ -2221,7 +2226,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = MockMoloch::new()
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         contract.update_delegate_key("soda".to_string());
         let old_key = contract.members_by_delegate_key.get(&bob()).unwrap();
@@ -2285,7 +2290,7 @@ mod tests {
         let member = MockMember::new().build();
         let mut contract = MockMoloch::new()
             .add_member(member)
-            .register_user(bob(), storage_deposit())
+            .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let mut context_builder = get_context_builder(false);
         contract.update_delegate_key("soda".to_string());
