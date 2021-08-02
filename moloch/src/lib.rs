@@ -19,6 +19,7 @@ use std::collections::HashMap;
 mod ft_callbacks;
 mod guild_bank;
 mod proposal_escrow;
+mod storage_impl;
 
 // Implement Moloch Contract
 
@@ -954,7 +955,7 @@ impl Moloch {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
-mod tests {
+pub mod mocks {
     use super::*;
     use near_sdk::test_utils::{
         get_created_receipts, get_logs, testing_env_with_promise_results, VMContextBuilder,
@@ -962,7 +963,41 @@ mod tests {
     use near_sdk::{testing_env, Balance, MockedBlockchain, PromiseResult, VMContext};
     use std::convert::TryInto;
 
-    struct MockMember {
+    pub fn get_context(is_view: bool) -> VMContext {
+        VMContextBuilder::new()
+            .signer_account_id(bob().try_into().unwrap())
+            .is_view(is_view)
+            .build()
+    }
+
+    pub fn get_context_builder(is_view: bool) -> VMContextBuilder {
+        VMContextBuilder::new()
+            .signer_account_id(bob().try_into().unwrap())
+            .is_view(is_view)
+            .clone()
+    }
+
+    pub fn bob() -> AccountId {
+        "bob.near".to_string()
+    }
+
+    pub fn robert() -> AccountId {
+        "robert.testnet".to_string()
+    }
+
+    pub fn alice() -> AccountId {
+        "alice.testnet".to_string()
+    }
+
+    pub fn fdai() -> AccountId {
+        "fdai.testnet".to_string()
+    }
+
+    pub fn storage_deposit() -> u128 {
+        9000000000000000000000
+    }
+
+    pub struct MockMember {
         delegate_key: AccountId,
         shares: u128,
         exists: bool,
@@ -970,7 +1005,7 @@ mod tests {
     }
 
     impl MockMember {
-        fn new() -> Self {
+        pub fn new() -> Self {
             MockMember {
                 delegate_key: robert(),
                 shares: 10,
@@ -979,22 +1014,22 @@ mod tests {
             }
         }
 
-        fn shares(&mut self, shares: u128) -> &mut Self {
+        pub fn shares(&mut self, shares: u128) -> &mut Self {
             self.shares = shares;
             self
         }
 
-        fn delegate_key(&mut self, delegate_key: AccountId) -> &mut Self {
+        pub fn delegate_key(&mut self, delegate_key: AccountId) -> &mut Self {
             self.delegate_key = delegate_key;
             self
         }
 
-        fn highest_index_yes_vote(&mut self, highest_index_yes_vote: u64) -> &mut Self {
+        pub fn highest_index_yes_vote(&mut self, highest_index_yes_vote: u64) -> &mut Self {
             self.highest_index_yes_vote = highest_index_yes_vote;
             self
         }
 
-        fn build(&self) -> Member {
+        pub fn build(&self) -> Member {
             Member {
                 delegate_key: self.delegate_key.to_string(),
                 shares: self.shares,
@@ -1003,10 +1038,9 @@ mod tests {
             }
         }
     }
-
     // For better test isolation between function calls
     // Create a Mock Propoposal
-    struct MockProposal {
+    pub struct MockProposal {
         /// The member who submitted the proposal
         proposer: AccountId,
         /// The applicant who wishes to become a member - this will be used for withdrawls
@@ -1036,7 +1070,7 @@ mod tests {
     }
 
     impl MockProposal {
-        fn new() -> Self {
+        pub fn new() -> Self {
             MockProposal {
                 proposer: bob(),
                 applicant: robert(),
@@ -1054,39 +1088,39 @@ mod tests {
             }
         }
 
-        fn processed(&mut self, processed: bool) -> &mut Self {
+        pub fn processed(&mut self, processed: bool) -> &mut Self {
             self.processed = processed;
             self
         }
 
-        fn aborted(&mut self, aborted: bool) -> &mut Self {
+        pub fn aborted(&mut self, aborted: bool) -> &mut Self {
             self.aborted = aborted;
             self
         }
 
-        fn shares_requested(&mut self, shares_requested: u128) -> &mut Self {
+        pub fn shares_requested(&mut self, shares_requested: u128) -> &mut Self {
             self.shares_requested = shares_requested;
             self
         }
 
-        fn proposer(&mut self, proposer: AccountId) -> &mut Self {
+        pub fn proposer(&mut self, proposer: AccountId) -> &mut Self {
             self.proposer = proposer.to_string();
             self
         }
 
-        fn applicant(&mut self, applicant: AccountId) -> &mut Self {
+        pub fn applicant(&mut self, applicant: AccountId) -> &mut Self {
             self.applicant = applicant.to_string();
             self
         }
 
-        fn yes_vote(&mut self, member: &Member) -> &mut Self {
+        pub fn yes_vote(&mut self, member: &Member) -> &mut Self {
             self.yes_votes += member.shares;
             self.votes_by_member
                 .insert(member.delegate_key.to_string(), Vote::Yes);
             self
         }
 
-        fn no_vote(&mut self, member: &Member) -> &mut Self {
+        pub fn no_vote(&mut self, member: &Member) -> &mut Self {
             self.no_votes += member.shares;
             self.votes_by_member
                 .insert(member.delegate_key.to_string(), Vote::No);
@@ -1095,7 +1129,7 @@ mod tests {
 
         // Add to queue
         // Update total_shares_requested
-        fn build(&self) -> Proposal {
+        pub fn build(&self) -> Proposal {
             let mut votes_by_member = HashMap::new();
 
             for (key, val) in self.votes_by_member.iter() {
@@ -1119,7 +1153,7 @@ mod tests {
         }
     }
 
-    struct MockMoloch {
+    pub struct MockMoloch {
         summoner: AccountId,
         approved_token: AccountId,
         period_duration: U64,
@@ -1135,11 +1169,12 @@ mod tests {
         members: UnorderedMap<AccountId, Member>,
         members_by_delegate_key: UnorderedMap<AccountId, AccountId>,
         user_storage_accounts: UnorderedMap<AccountId, UserStorageBalance>,
+        min_account_storage_usage: u64,
         user_balances: UnorderedMap<AccountId, u128>,
     }
 
     impl MockMoloch {
-        fn new() -> Self {
+        pub fn new() -> Self {
             MockMoloch {
                 summoner: bob(),
                 approved_token: fdai(),
@@ -1159,27 +1194,28 @@ mod tests {
                     b"mock_members_by_delegate_key".to_vec(),
                 ),
                 user_storage_accounts: UnorderedMap::new(b"mock_user_storage_account".to_vec()),
+                min_account_storage_usage: 5,
                 user_balances: UnorderedMap::new(b"mock_user_balances".to_vec()),
             }
         }
 
-        fn add_escrow_deposit(&mut self, sender: AccountId, amount: u128) -> &mut Self {
+        pub fn add_escrow_deposit(&mut self, sender: AccountId, amount: u128) -> &mut Self {
             self.user_balances.insert(&sender, &amount);
             self
         }
 
-        fn summoner(&mut self, summoner: AccountId) -> &mut Self {
+        pub fn summoner(&mut self, summoner: AccountId) -> &mut Self {
             self.summoner = summoner;
             self
         }
 
-        fn add_proposal(&mut self, proposal: Proposal) -> &mut Self {
+        pub fn add_proposal(&mut self, proposal: Proposal) -> &mut Self {
             self.proposal_queue.push(&proposal);
             self.total_shares_requested += proposal.shares_requested;
             self
         }
 
-        fn add_member(&mut self, member: Member) -> &mut Self {
+        pub fn add_member(&mut self, member: Member) -> &mut Self {
             self.members_by_delegate_key
                 .insert(&member.delegate_key, &member.delegate_key);
             self.members.insert(&member.delegate_key, &member);
@@ -1188,7 +1224,7 @@ mod tests {
             self
         }
 
-        fn register_user(&mut self, account_id: AccountId, amount: u128) -> &mut Self {
+        pub fn register_user(&mut self, account_id: AccountId, amount: u128) -> &mut Self {
             self.user_storage_accounts.insert(
                 &account_id,
                 &UserStorageBalance {
@@ -1199,7 +1235,12 @@ mod tests {
             self
         }
 
-        fn update_member_delegate_key(
+        pub fn min_account_storage_usage(&mut self, amount: u64) -> &mut Self {
+            self.min_account_storage_usage = amount;
+            self
+        }
+
+        pub fn update_member_delegate_key(
             &mut self,
             delegate_key: &AccountId,
             account_id: &AccountId,
@@ -1212,7 +1253,7 @@ mod tests {
             self
         }
 
-        fn build(&self) -> Moloch {
+        pub fn build(&self) -> Moloch {
             let mut moloch = Moloch::new(
                 self.summoner.to_string(),
                 self.approved_token.to_string(),
@@ -1231,6 +1272,7 @@ mod tests {
             moloch
                 .user_storage_accounts
                 .extend(self.user_storage_accounts.iter());
+            moloch.min_account_storage_usage = self.min_account_storage_usage;
             moloch
                 .members_by_delegate_key
                 .extend(self.members_by_delegate_key.iter());
@@ -1240,42 +1282,19 @@ mod tests {
             moloch
         }
     }
+}
 
-    // Create a Mock member
-
-    fn get_context(is_view: bool) -> VMContext {
-        VMContextBuilder::new()
-            .signer_account_id(bob().try_into().unwrap())
-            .is_view(is_view)
-            .build()
-    }
-
-    fn get_context_builder(is_view: bool) -> VMContextBuilder {
-        VMContextBuilder::new()
-            .signer_account_id(bob().try_into().unwrap())
-            .is_view(is_view)
-            .clone()
-    }
-
-    fn bob() -> AccountId {
-        "bob.near".to_string()
-    }
-
-    fn robert() -> AccountId {
-        "robert.testnet".to_string()
-    }
-
-    fn alice() -> AccountId {
-        "alice.testnet".to_string()
-    }
-
-    fn fdai() -> AccountId {
-        "fdai.testnet".to_string()
-    }
-
-    fn storage_deposit() -> u128 {
-        9000000000000000000000
-    }
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mocks::{
+        alice, bob, get_context, get_context_builder, robert, storage_deposit, MockMember,
+        MockMoloch, MockProposal,
+    };
+    use near_sdk::test_utils::{get_logs, VMContextBuilder};
+    use near_sdk::{testing_env, MockedBlockchain};
+    use std::convert::TryInto;
 
     /// Tests for submit propposal
     #[test]

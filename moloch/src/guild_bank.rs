@@ -58,23 +58,9 @@ impl GuildBank {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use near_sdk::test_utils::VMContextBuilder;
+    use crate::mocks::{fdai, get_context, robert};
     use near_sdk::MockedBlockchain;
     use near_sdk::{testing_env, VMContext};
-    use std::convert::TryInto;
-
-    fn get_context(is_view: bool) -> VMContext {
-        VMContextBuilder::new()
-            .signer_account_id("bob_near".try_into().unwrap())
-            .is_view(is_view)
-            .build()
-    }
-    fn robert() -> AccountId {
-        "robert.testnet".to_string()
-    }
-    fn fdai() -> AccountId {
-        "fdai.testnet".to_string()
-    }
 
     // Withdraw normal
     // Withdraw divide by 0

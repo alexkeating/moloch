@@ -59,27 +59,11 @@ impl ProposalEscrow {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
+
     use super::*;
-    use near_sdk::test_utils::{
-        get_created_receipts, get_logs, testing_env_with_promise_results, VMContextBuilder,
-    };
-    use near_sdk::{testing_env, Balance, MockedBlockchain, PromiseResult, VMContext};
-    use std::convert::TryInto;
+    use near_sdk::{testing_env, MockedBlockchain};
 
-    fn fdai() -> AccountId {
-        "fdai.testnet".to_string()
-    }
-
-    fn bob() -> AccountId {
-        "bob.near".to_string()
-    }
-
-    fn get_context(is_view: bool) -> VMContext {
-        VMContextBuilder::new()
-            .signer_account_id(bob().try_into().unwrap())
-            .is_view(is_view)
-            .build()
-    }
+    use crate::mocks::{bob, get_context};
 
     // deposit with no previous balance
     #[test]

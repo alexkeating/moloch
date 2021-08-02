@@ -2,9 +2,10 @@ use crate::*;
 use near_contract_standards::storage_management::{
     StorageBalance, StorageBalanceBounds, StorageManagement,
 };
-use near_sdk::json_types::U128;
+use near_sdk::json_types::{ValidAccountId, U128};
+use std::convert::TryFrom;
 
-use near_sdk::{env, Balance, Promise};
+use near_sdk::{assert_one_yocto, env, Balance, Promise};
 
 // So now a user will need to register to
 // moloch before they can send fungible tokens
@@ -13,7 +14,7 @@ use near_sdk::{env, Balance, Promise};
 // necessary because they cost less gas to store
 //
 // User accounts will live on Moloch and we can split to internal logic
-impl StorageManagent for Moloch {
+impl StorageManagement for Moloch {
     // Add assigned balance to a lookup map
     // If already exists add to the balance
     // If less than minimum amount panic
@@ -21,41 +22,62 @@ impl StorageManagent for Moloch {
     // Does registration only need to be implemented
     fn storage_deposit(
         &mut self,
-        account_id: Option<AccountId>,
+        account_id: Option<ValidAccountId>,
         registration_only: Option<bool>,
     ) -> StorageBalance {
         let amount: Balance = env::attached_deposit();
-        let account_id = account_id.unwrap_or_else(env::predecessor_account_id);
-        if self.accounts.contains_key(&account_id) {
-            log!("The account is already registered, refunding the deposit");
+        let account_id = match account_id {
+            Some(account_id) => account_id.to_string(),
+            None => env::predecessor_account_id(),
+        };
+        let valid_account_id = ValidAccountId::try_from(account_id.to_string()).unwrap();
+
+        let mut user_storage = UserStorageBalance {
+            total: 0,
+            available: 0,
+        };
+        let user_storage_opt = self.user_storage_accounts.get(&account_id);
+        if user_storage_opt.is_some() {
+            user_storage = self.user_storage_accounts.get(&account_id).unwrap();
+        };
+        if registration_only.is_none() || registration_only.unwrap() == false {
+            self.user_storage_accounts.insert(
+                &account_id,
+                &UserStorageBalance {
+                    total: user_storage.total + amount,
+                    available: user_storage.available + amount,
+                },
+            );
+            return self.storage_balance_of(valid_account_id).unwrap();
+        }
+
+        let min_balance = self.storage_balance_bounds().min.0;
+        if amount < min_balance {
+            env::panic(b"The attached deposit is less than the minimum storage balance");
+        }
+        // If account already registered refund the full amount
+        if user_storage_opt.is_some() {
+            env::log("The account is already registered, refunding the deposit".as_bytes());
             if amount > 0 {
                 Promise::new(env::predecessor_account_id()).transfer(amount);
             }
-        } else {
-            let min_balance = self.storage_balance_bounds().min.0;
-            if amount < min_balance {
-                env::panic(b"The attached deposit is less than the minimum storage balance");
-            }
-
-            if self
-                .user_storage_accounts
-                .insert(
-                    account_id,
-                    &StorageBalance {
-                        total: amount,
-                        available: amount - min_balance,
-                    },
-                )
-                .is_some()
-            {
-                env::panic(b"The account is already registered");
-            }
-            let refund = amount - min_balance;
-            if refund > 0 {
-                Promise::new(env::predecessor_account_id()).transfer(refund);
-            }
+            return self.storage_balance_of(valid_account_id).unwrap();
         }
-        self.storage_balance_of(&account_id).unwrap()
+
+        // If registration true refund above minimum
+        self.user_storage_accounts.insert(
+            &account_id,
+            &UserStorageBalance {
+                total: amount,
+                available: amount - min_balance,
+            },
+        );
+
+        let refund = amount - min_balance;
+        if refund > 0 {
+            Promise::new(env::predecessor_account_id()).transfer(refund);
+        }
+        self.storage_balance_of(valid_account_id).unwrap()
     }
 
     // Send deposit, if amount is greater than deposit panic
@@ -70,30 +92,45 @@ impl StorageManagent for Moloch {
             )
         };
 
-        let storage_account = Some(user_account);
+        let storage_account = user_account.unwrap();
 
         // if amount is none transfer entire available balance
         if amount.is_none() {
-            Promise:new(predecessor_account_id).transfer(storage_account.available);
+            Promise::new(predecessor_account_id.to_string()).transfer(storage_account.available);
             let total = storage_account.total - storage_account.available;
-            let new_storage_balance = StorageBalance{total: total, available: 0}
-            self.user_storage_accounts.insert(&predecessor_account_id, &new_storage_balance)
-            new_storage_balance
+            let new_storage_balance = UserStorageBalance {
+                total: total,
+                available: 0,
+            };
+            self.user_storage_accounts
+                .insert(&predecessor_account_id, &new_storage_balance);
+            return StorageBalance {
+                total: new_storage_balance.total.into(),
+                available: new_storage_balance.available.into(),
+            };
         }
 
         // if amount is not None return amount
         // Existing amount path
-        if amount.is_some() {
-            assert!(storage_account.available >= amount, "Requested amount to withdraw is greater than the avialable amount");
-            Promise:new(predecessor_account_id).transfer(amount);
-            let available = storage_account.available - amount;
-            let new_storage_balance = StorageBalance{total: total, available: available}
-            self.user_storage_accounts.insert(&predecessor_account_id, &new_storage_balance)
-            new_storage_balance
-        }
-
-        user_account
-
+        let amount = amount.unwrap();
+        assert!(
+            storage_account.available >= amount.into(),
+            "Requested amount to withdraw is greater than the avialable amount"
+        );
+        Promise::new(predecessor_account_id.to_string()).transfer(amount.into());
+        let available = u128::from(storage_account.available) - u128::from(amount);
+        let new_storage_balance = StorageBalance {
+            total: storage_account.total.into(),
+            available: available.into(),
+        };
+        self.user_storage_accounts.insert(
+            &predecessor_account_id,
+            &UserStorageBalance {
+                total: new_storage_balance.total.into(),
+                available: new_storage_balance.available.into(),
+            },
+        );
+        new_storage_balance
     }
 
     // If zero balance remove
@@ -104,15 +141,15 @@ impl StorageManagent for Moloch {
         let force = force.unwrap_or(false);
         if let Some(balance) = self.user_storage_accounts.get(&account_id) {
             if balance.available == 0 || force {
-                self.accounts.remove(&account_id);
+                self.user_storage_accounts.remove(&account_id);
                 Promise::new(account_id.clone()).transfer(balance.available + 1);
-                Some((account_id, balance))
+                true
             } else {
-                env::panic(b"Can't unregister the account with the positive balance without force")
+                env::panic(b"Can't unregister the account with a positive balance without a force")
             }
         } else {
-            log!("The account {} is not registered", &account_id);
-            None
+            env::log(format!("The account {} is not registered", &account_id).as_bytes());
+            false
         }
     }
 
@@ -122,13 +159,142 @@ impl StorageManagent for Moloch {
         let min_required_storage_balance =
             Balance::from(self.min_account_storage_usage) * env::storage_byte_cost();
         StorageBalanceBounds {
-            min: min_account_storage_usage,
+            min: u128::from(min_required_storage_balance).into(),
             max: None,
         }
     }
 
     // Users balance for storage
-    fn storage_balance_of(&self, account_id: AccountId) -> Option<StorageBaance> {
-        self.user_accounts_storage.get(&account_id)
+    fn storage_balance_of(&self, account_id: ValidAccountId) -> Option<StorageBalance> {
+        match self.user_storage_accounts.get(&account_id.to_string()) {
+            Some(user_storage_balance) => Some(StorageBalance {
+                total: user_storage_balance.total.into(),
+                available: user_storage_balance.available.into(),
+            }),
+            None => None,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mocks::{
+        alice, bob, get_context, get_context_builder, robert, storage_deposit, MockMember,
+        MockMoloch, MockProposal,
+    };
+    use near_sdk::test_utils::{get_logs, VMContextBuilder};
+    use near_sdk::{testing_env, MockedBlockchain};
+    use std::convert::TryInto;
+
+    // If account id omitted then add deposit to predecessor_account (sim)
+    // If account id is included then add to the account id (sim)
+    // If registration only true and amount is over minimum then refund the minimum (sim)
+    // If registration only and already registered then refund the full amount (sim)
+    // If registration and exact amount then refund nothing
+    //
+    // storage_deposit
+
+    // If no amount than the full amount is refunded
+    // If amount specified is greater than available amount panic
+    // If amount specified is okay then withdraw that amount
+    //
+    // storage_withdraw
+
+    // If account is not registered then the function must return false
+    #[test]
+    fn storage_unregisted_not_registered() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().build();
+        testing_env!(context_builder.attached_deposit(1).build());
+        let unregistered = contract.storage_unregister(Some(false));
+        assert_eq!(unregistered, false, "User is registered");
+    }
+
+    #[test]
+    fn storage_unregisted_none() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().register_user(bob(), 0).build();
+        testing_env!(context_builder.attached_deposit(1).build());
+        let unregistered = contract.storage_unregister(None);
+        assert_eq!(unregistered, true, "Did not register without force");
+    }
+
+    // If force is true and account exists than non-zero accounts should be ignored and
+    // the account is removed
+    #[test]
+    fn storage_unregisted_with_force() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().register_user(bob(), 5).build();
+        testing_env!(context_builder.attached_deposit(1).build());
+        let unregistered = contract.storage_unregister(Some(true));
+        assert_eq!(unregistered, true, "User was not unregistered");
+        let user = contract.user_storage_accounts.get(&bob());
+        assert_eq!(user.is_none(), true, "User is still registered");
+    }
+
+    // If caller has a non zero balance without a force than panic
+    #[test]
+    #[should_panic(
+        expected = r#"Can't unregister the account with a positive balance without a force"#
+    )]
+    fn storage_unregisted_no_force() {
+        let mut context_builder = get_context_builder(false);
+        testing_env!(context_builder.build());
+        let mut contract = MockMoloch::new().register_user(bob(), 5).build();
+        testing_env!(context_builder.attached_deposit(1).build());
+        contract.storage_unregister(Some(false));
+    }
+
+    // storage_unregister
+
+    // Call and get back expected balance
+    #[test]
+    fn storage_balance_bounds() {
+        let context = get_context(false);
+        testing_env!(context);
+        let contract = MockMoloch::new().min_account_storage_usage(20).build();
+        let storage_balance_bounds = contract.storage_balance_bounds();
+        assert_eq!(storage_balance_bounds.max, None, "Max storage is not None");
+        assert_eq!(
+            storage_balance_bounds.min,
+            U128::from(200000000000000000000),
+            "Min storage is not correct"
+        );
+    }
+
+    // User acount exists
+    #[test]
+    fn storage_balance_of_exists() {
+        let context = get_context(false);
+        testing_env!(context);
+        let contract = MockMoloch::new().register_user(bob(), 5).build();
+        let balanace = contract
+            .storage_balance_of(bob().try_into().unwrap())
+            .unwrap();
+        assert_eq!(
+            u128::from(balanace.total),
+            5,
+            "User storage total balance is incorrect"
+        );
+        assert_eq!(
+            u128::from(balanace.available),
+            5,
+            "User storage available balance is incorrect"
+        );
+    }
+
+    // User account does not exist
+    #[test]
+    fn storage_balance_of_does_not_exists() {
+        let context = get_context(false);
+        testing_env!(context);
+        let contract = MockMoloch::new().build();
+        let balance = contract.storage_balance_of(bob().try_into().unwrap());
+        assert_eq!(balance.is_none(), true, "User storage is not None");
     }
 }
