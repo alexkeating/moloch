@@ -11,4 +11,4 @@ near deploy --wasmFile res/test_fungible_token.wasm --accountId $FDAI_ACCOUNT_ID
 near call $FDAI_ACCOUNT_ID.mrkeating.testnet new_default_meta --accountId $FDAI_ACCOUNT_ID.mrkeating.testnet --args '{"owner_id":"mrkeating.testnet","total_supply":"1000000000"}'
 
 near deploy --wasmFile res/moloch.wasm --accountId $MOLOCH_ACCOUNT_ID.mrkeating.testnet
-near call $MOLOCH_ACCOUNT_ID.mrkeating.testnet new --accountId $MOLOCH_ACCOUNT_ID.mrkeating.testnet --args '{"summoner": "mrkeating.testnet", "approved_token": '$FDAI_ACCOUNT_ID.mrkeating.testnet', "period_duration": "10000000000", "voting_period_length": "2", "grace_period_length": "1", "abort_window": "2", "proposal_deposit": "10", "dilution_bound": "1", "processing_reward": "1"}'
+near call $MOLOCH_ACCOUNT_ID.mrkeating.testnet new --accountId $MOLOCH_ACCOUNT_ID.mrkeating.testnet --args '{"summoner": "mrkeating.testnet", "approved_token": "'$FDAI_ACCOUNT_ID.mrkeating.testnet'", "period_duration": "10000000000", "voting_period_length": "2", "grace_period_length": "1", "abort_window": "2", "proposal_deposit": "10", "dilution_bound": "1", "processing_reward": "1"}'

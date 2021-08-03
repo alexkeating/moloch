@@ -15,6 +15,22 @@ const registerFdai = async (masterAccount, accountId, ftAccountId) => {
   });
 };
 
+const registerMoloch = async (masterAccount, accountId, molochAccountId) => {
+  console.log(masterAccount);
+  console.log(accountId);
+  console.log(molochAccountId);
+  console.log(nearAPI.utils.format.parseNearAmount(".1"));
+  await masterAccount.functionCall({
+    contractId: molochAccountId,
+    methodName: "storage_deposit",
+    args: {
+      account_id: accountId,
+      registration_only: false
+    },
+    attachedDeposit: nearAPI.utils.format.parseNearAmount(".4")
+  });
+};
+
 const transferFdai = async (masterAccount, accountId, amount, ftAccountId) => {
   await masterAccount.functionCall({
     contractId: ftAccountId,
@@ -134,6 +150,11 @@ describe("Moloch test", () => {
     await registerFdai(masterAccount, aliceId, ftAccountId);
     await registerFdai(masterAccount, contractAccountId, ftAccountId);
     await registerFdai(masterAccount, bobId, ftAccountId);
+
+    await registerMoloch(masterAccount, masterContractId, contractAccountId);
+    await registerMoloch(masterAccount, aliceId, contractAccountId);
+    await registerMoloch(bob, bobId, contractAccountId);
+
     await transferFdai(masterAccount, aliceId, "1000", ftAccountId);
     await transferCallFdai(alice, contractAccountId, "100", ftAccountId);
     await transferCallFdai(
@@ -142,7 +163,7 @@ describe("Moloch test", () => {
       "1000",
       ftAccountId
     );
-  });
+  }, 120000);
 
   // Create a proposal for bob
   test("Create a proposal for the first member", async () => {
@@ -286,7 +307,7 @@ describe("Moloch test", () => {
     expect(molochBalance).toEqual("1099");
   }, 120000);
 
-	test("Rage quit", async () => {
+  test("Rage quit", async () => {
     await alice.functionCall({
       contractId: contractAccountId,
       methodName: "rage_quit",
@@ -295,14 +316,11 @@ describe("Moloch test", () => {
       },
       gas: 300000000000000
     });
-		
-		// check the correct amount is withdrawn and sent alice
+
+    // check the correct amount is withdrawn and sent alice
     const bankBalance = await getBankBalance(masterAccount, contractAccountId);
     expect(bankBalance).toEqual("4.54");
-
-
-
-	})
+  });
 
   // rage quit
   // abort

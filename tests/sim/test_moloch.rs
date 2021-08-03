@@ -1,11 +1,13 @@
 use near_sdk::json_types::U128;
 use near_sdk_sim::{call, to_yocto, view};
 
-use crate::utils::init_moloch;
+use crate::utils::{init_moloch, register_user_moloch};
 
 #[test]
 fn simulate_submit_proposal() {
     let (_, moloch, fdai, alice, bob, deposit_amount) = init_moloch();
+    register_user_moloch(&alice, &moloch);
+    register_user_moloch(&bob, &moloch);
 
     call!(
         bob,

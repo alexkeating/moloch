@@ -27,6 +27,18 @@ pub fn register_user(user: &near_sdk_sim::UserAccount) {
     .assert_success();
 }
 
+pub fn register_user_moloch(
+    user: &near_sdk_sim::UserAccount,
+    moloch: &near_sdk_sim::ContractAccount<MolochContract>,
+) {
+    call!(
+        user,
+        moloch.storage_deposit(None, Some(false)),
+        to_yocto("12"),
+        near_sdk_sim::DEFAULT_GAS
+    );
+}
+
 pub fn init_moloch() -> (
     UserAccount,
     ContractAccount<MolochContract>,
@@ -50,7 +62,6 @@ pub fn init_moloch() -> (
     register_user(&alice);
     register_user(&bob);
     register_user(&root);
-
     let deposit_amount = to_yocto("2");
 
     println!("Account Id");

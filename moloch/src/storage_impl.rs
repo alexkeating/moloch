@@ -14,12 +14,14 @@ use near_sdk::{assert_one_yocto, env, Balance, Promise};
 // necessary because they cost less gas to store
 //
 // User accounts will live on Moloch and we can split to internal logic
+#[near_bindgen]
 impl StorageManagement for Moloch {
     // Add assigned balance to a lookup map
     // If already exists add to the balance
     // If less than minimum amount panic
     //
     // Does registration only need to be implemented
+    #[payable]
     fn storage_deposit(
         &mut self,
         account_id: Option<ValidAccountId>,
