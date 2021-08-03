@@ -706,6 +706,7 @@ impl Moloch {
     /// 2. Reduce the total shares by the shares_to_burn
     /// 3. Instruct the guild bank to send the member their proportional amount of the approved
     ///    token
+    #[payable]
     pub fn rage_quit(&mut self, shares_to_burn: U128) -> Promise {
         let initial_storage_usage = env::storage_usage();
         let _shares_to_burn = u128::from(shares_to_burn);

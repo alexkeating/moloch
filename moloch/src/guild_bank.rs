@@ -38,7 +38,7 @@ impl GuildBank {
             U128::from(amount),
             Some("Withdraw from guild bank".to_string()),
             &self.token_id,
-            0,
+            1,
             // Change to a fixed gas amount
             prepaid_gas / 2,
         )

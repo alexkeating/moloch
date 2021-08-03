@@ -27,7 +27,7 @@ const registerMoloch = async (masterAccount, accountId, molochAccountId) => {
       account_id: accountId,
       registration_only: false
     },
-    attachedDeposit: nearAPI.utils.format.parseNearAmount(".4")
+    attachedDeposit: nearAPI.utils.format.parseNearAmount("1")
   });
 };
 
@@ -153,7 +153,7 @@ describe("Moloch test", () => {
 
     await registerMoloch(masterAccount, masterContractId, contractAccountId);
     await registerMoloch(masterAccount, aliceId, contractAccountId);
-    await registerMoloch(bob, bobId, contractAccountId);
+    await registerMoloch(masterAccount, bobId, contractAccountId);
 
     await transferFdai(masterAccount, aliceId, "1000", ftAccountId);
     await transferCallFdai(alice, contractAccountId, "100", ftAccountId);
@@ -307,6 +307,7 @@ describe("Moloch test", () => {
     expect(molochBalance).toEqual("1099");
   }, 120000);
 
+  // rage quit
   test("Rage quit", async () => {
     await alice.functionCall({
       contractId: contractAccountId,
@@ -314,15 +315,16 @@ describe("Moloch test", () => {
       args: {
         shares_to_burn: "5" // 5 of 11 total
       },
+      attachedDeposit: "1",
       gas: 300000000000000
     });
 
     // check the correct amount is withdrawn and sent alice
     const bankBalance = await getBankBalance(masterAccount, contractAccountId);
-    expect(bankBalance).toEqual("4.54");
+    // TODO: Double check this rounding is okay
+    expect(bankBalance).toEqual("6");
   });
 
-  // rage quit
   // abort
   // failed vote
 });
