@@ -81,22 +81,16 @@ fn simulate_storage_deposit_already_registered() {
         near_sdk_sim::DEFAULT_GAS
     );
     let end_amount = bob.account().unwrap().amount;
-    println!("Difference {}", (start_amount - end_amount));
-    println!("Start {}", (start_amount));
-    println!("End {}", (end_amount));
     assert!(
         (start_amount - end_amount) < 800000000000000000000,
         "Not receieve correct excess amount"
     );
 }
 #[test]
-#[should_panic(
-    expected = r#"The attached deposit is less than the minimum storage balance bounds"#
-)]
 fn simulate_storage_deposit_below_min_amount() {
     let (_, moloch, _, alice, _, _) = init_moloch();
-    let deposit = 1000;
-    call!(
+    let deposit = 0;
+    let res = call!(
         alice,
         moloch.storage_deposit(
             Some(alice.account_id.to_string().try_into().unwrap()),
@@ -105,6 +99,50 @@ fn simulate_storage_deposit_below_min_amount() {
         deposit,
         near_sdk_sim::DEFAULT_GAS
     );
+    assert!(
+        format!("{:?}", res.status())
+            .contains("The attached deposit is less than the minimum storage balance bounds"),
+        "Corrrect error was not raised"
+    )
 }
 
-// registration only above min refund
+// Requested amount is greater than deposited
+#[test]
+fn simulate_storage_withdraw_and_unregister() {
+    let (_, moloch, _, alice, _, _) = init_moloch();
+    let deposit = to_yocto("10");
+    let start_amount = &alice.account().unwrap().amount;
+    let res = call!(
+        alice,
+        moloch.storage_deposit(
+            Some(alice.account_id.to_string().try_into().unwrap()),
+            Some(false)
+        ),
+        deposit,
+        near_sdk_sim::DEFAULT_GAS
+    );
+    let res = call!(
+        alice,
+        moloch.storage_withdraw(Some(to_yocto("9").into())),
+        1,
+        near_sdk_sim::DEFAULT_GAS
+    );
+    let end_amount = &alice.account().unwrap().amount;
+    println!("Resp {:?}", res);
+    println!("Diff {}", (start_amount - end_amount));
+    println!("yocto {}", to_yocto("1.1"));
+    assert!((start_amount - end_amount) < to_yocto("1.1"));
+    let res = call!(
+        alice,
+        moloch.storage_unregister(Some(true)),
+        1,
+        near_sdk_sim::DEFAULT_GAS
+    );
+    let end_amount = &alice.account().unwrap().amount;
+    println!("Resp {:?}", res);
+    println!("Diff {}", (start_amount - end_amount));
+    println!("yocto {}", 6000000000000000000000u128); // slightly above minimum storage
+    assert!((start_amount - end_amount) < 6000000000000000000000);
+}
+
+// amount sent back is correct

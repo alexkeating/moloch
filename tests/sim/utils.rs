@@ -86,7 +86,6 @@ pub fn init_moloch() -> (
     );
 
     register_user(&moloch.user_account);
-
     call!(
         root,
         fdai.ft_transfer(alice.valid_account_id(), to_yocto("100").into(), None),

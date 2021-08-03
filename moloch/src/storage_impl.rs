@@ -90,6 +90,7 @@ impl StorageManagement for Moloch {
 
     // Send deposit, if amount is greater than deposit panic
     // if not registered panic
+    #[payable]
     fn storage_withdraw(&mut self, amount: Option<U128>) -> StorageBalance {
         assert_one_yocto();
         let predecessor_account_id = env::predecessor_account_id();
@@ -145,6 +146,7 @@ impl StorageManagement for Moloch {
 
     // If zero balance remove
     // IF non-zero balance force must be set to remove
+    #[payable]
     fn storage_unregister(&mut self, force: Option<bool>) -> bool {
         assert_one_yocto();
         let account_id = env::predecessor_account_id();
