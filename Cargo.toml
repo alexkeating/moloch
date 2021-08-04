@@ -1,16 +1,20 @@
 [package]
-name = "moloch"
-version = "0.1.0"
-authors = ["Alexander Keating <keating.dev@protonmail.com>"]
+name = "moloch-wrapper"
+version = "0.0.1"
+authors = [""]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[lib]
-crate-type = ["cdylib", "rlib"]
 
-
-
-[dependencies]
-near-sdk = "3.1.0"
+[dev-dependencies]
 near-contract-standards = "3.1.1"
-serde = "1.0.117"
+near-sdk = "3.1.0"
+near-sdk-sim = "3.2.0"
+moloch = { path = "./moloch" }
+test-fungible-token = { path = "./test-fungible-token" }
+
+[workspace]
+# remember to include a member for each contract
+members = [
+  "moloch",
+  "test-fungible-token",
+]

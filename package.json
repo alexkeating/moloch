@@ -1,0 +1,17 @@
+{
+  "name": "moloch",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "git@github.com:alexkeating/moloch.git",
+  "author": "Alex Keating <keating.dev@protonmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "cross-env": "^7.0.3",
+    "dotenv": "^10.0.0",
+    "jest": "^27.0.6",
+    "near-api-js": "^0.42.0"
+  },
+  "scripts": {
+    "test": "cross-env REACT_APP_ENV=dev jest moloch.test.js --useStderr"
+  }
+}
