@@ -100,9 +100,6 @@ const delay = ms => {
   return new Promise(resolve => setTimeout(resolve, ms));
 };
 
-// Setup Contract
-// and tear it down
-// By deleting the contract account
 describe("Moloch test", () => {
   let alice;
   let aliceId;
@@ -167,12 +164,6 @@ describe("Moloch test", () => {
 
   // Create a proposal for bob
   test("Create a proposal for the first member", async () => {
-    // proposal_deposit is 10
-    //
-    // Fetch token balance for master before and after
-    // make sure it matches the expected transfer
-
-    // const deposit = new BN(storagePerSale).add(new BN(parseNearAmount('0.1'))).toString();
     await masterAccount.functionCall({
       contractId: contractAccountId,
       methodName: "submit_proposal",
@@ -182,7 +173,6 @@ describe("Moloch test", () => {
         shares_requested: "10",
         details: "Let's add a second member"
       },
-      // attachedDeposit: deposit
       gas: 300000000000000
     });
 
@@ -250,13 +240,7 @@ describe("Moloch test", () => {
     expect(vote).toEqual("Yes");
   });
 
-  // Process proposal
-  // This can be refactored to send everything to escrow
-  // and we can expose a withdrawl mechanism on the main contract
-  // rather than having so many cross contract calls
   test("Process passed proposal", async () => {
-    // Move move tribute to the guild bank
-    // grace period + voting period = 3
     process_period = parseInt(proposalPeriod) + 3;
     console.log(process_period);
     current_period = await getCurentPeriod(masterAccount, contractAccountId);
@@ -345,5 +329,3 @@ describe("Moloch test", () => {
 	})
 
 });
-
-// Make sure process proposal and abort assert escrow values

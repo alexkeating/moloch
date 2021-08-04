@@ -20,8 +20,6 @@ mod guild_bank;
 mod proposal_escrow;
 mod storage_impl;
 
-// Implement Moloch Contract
-
 const MAX_VOTING_PERIOD_LENGTH: u64 = 10000000000000000000; // maximum length of voting period;
 const MAX_GRACE_PERIOD_LENGTH: u64 = 10000000000000000000; // maximum length of grace period
 const MAX_DILUTION_BOUND: u128 = 10000000000000000000; // maximum dilution bound
@@ -141,25 +139,6 @@ impl Vote {
     }
 }
 
-#[ext_contract(ext_self)]
-trait MolochManagement {
-    fn update_proposal(&mut self, proposal_index: U64, proposal: Proposal, message: String);
-}
-
-trait MolochManagement {
-    fn update_proposal(&mut self, proposal_index: U64, proposal: Proposal, message: String);
-}
-
-#[near_bindgen]
-impl MolochManagement for Moloch {
-    #[private]
-    fn update_proposal(&mut self, proposal_index: U64, proposal: Proposal, message: String) {
-        self.proposal_queue
-            .replace(proposal_index.into(), &proposal);
-        env::log(message.as_bytes());
-    }
-}
-
 #[near_bindgen]
 impl Moloch {
     #[init]
@@ -223,7 +202,6 @@ impl Moloch {
             "proposal_deposit cannot be smaller than processing reward"
         );
 
-        // create guild bank
         let bank = guild_bank::GuildBank::new(approved_token.clone());
         let escrow = proposal_escrow::ProposalEscrow::new();
 
@@ -271,6 +249,7 @@ impl Moloch {
     /// A function that determines the minimum storage
     /// needed to accept fungible token transers.
     // TODO: Determine if this is a suffcient minimum
+    #[private]
     fn measure_min_account_storage_usage(&mut self) {
         let initial_storage_usage = env::storage_usage();
         // Register in escrow,
@@ -294,13 +273,7 @@ impl Moloch {
         }
 
         let mut user_storage = user_storage_opt.unwrap();
-        println!("initial {}", initial_storage);
-        println!("used {}", storage_used);
-        println!("total {}", user_storage.total);
         if storage_used > initial_storage {
-            let x = (env::storage_byte_cost() * Balance::from(storage_used - initial_storage));
-            println!("hello {}", x);
-            println!("here");
             user_storage.available = user_storage
                 .available
                 .checked_sub(
@@ -649,14 +622,8 @@ impl Moloch {
                     .insert(&proposal.applicant, &proposal.applicant);
             }
             self.total_shares = self.total_shares.saturating_add(proposal.shares_requested);
-            // TODO: Do these promises need to be one after the other
-            // Can I await these
             self.bank.deposit(proposal.token_tribute);
-            // TODO: Orginal contract asserts this is successfull
-
-            // Proposal failed and applicant submitted
         } else {
-            // Return proposal token_tribute
             self.escrow
                 .deposit(proposal.applicant.clone(), proposal.token_tribute);
         }
@@ -1057,8 +1024,7 @@ pub mod mocks {
             }
         }
     }
-    // For better test isolation between function calls
-    // Create a Mock Propoposal
+
     pub struct MockProposal {
         /// The member who submitted the proposal
         proposer: AccountId,
@@ -1146,8 +1112,6 @@ pub mod mocks {
             self
         }
 
-        // Add to queue
-        // Update total_shares_requested
         pub fn build(&self) -> Proposal {
             let mut votes_by_member = HashMap::new();
 
@@ -1358,13 +1322,8 @@ mod tests {
 
         assert_eq!(proposal.unwrap(), expected_proposal);
         assert_eq!(contract.total_shares_requested, 10);
-        // let log = logs.get(0);
-        // assert_eq!(*log.unwrap(), format!("Proposal submitted! proposal_index: 0, sender: {}, member_address: {}, applicant: {}, token_tribute: 12, shares_requested: 10", bob().to_string(), bob().to_string(), robert().to_string()));
     }
-    // TODO: Integration Check if contract has the proper amount from submitting a
-    // proposal
 
-    // Add test with multiple proposals
     #[test]
     fn submit_proposal_multiple_proposals() {
         let context = get_context(false);
@@ -1400,7 +1359,6 @@ mod tests {
         assert_eq!(contract.total_shares_requested, 30);
     }
 
-    // TODO: Make these error strings a constant
     #[test]
     #[should_panic(expected = r#"applicant must be a valid account id"#)]
     fn submit_proposal_invalid_account() {
@@ -1467,8 +1425,6 @@ mod tests {
         testing_env!(context);
         contract.submit_vote(0.into(), 1);
 
-        // Assert that the correct proposal was voted on
-        // and that it was marked as a yes
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.yes_votes, 1);
         assert_eq!(proposal.no_votes, 0);
@@ -1477,9 +1433,6 @@ mod tests {
         assert_eq!(member.highest_index_yes_vote, 0);
     }
 
-    // TODO: add these and for successful have better asserts
-    // Multiple yes and no votes, do in integration/ end to end tests
-    // No vote
     #[test]
     fn submit_vote_no() {
         // Setup
@@ -1499,8 +1452,6 @@ mod tests {
         testing_env!(context);
         contract.submit_vote(0.into(), 2);
 
-        // Assert that the correct proposal was voted on
-        // and that it was marked as a yes
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.yes_votes, 0);
         assert_eq!(proposal.no_votes, 1);
@@ -1508,12 +1459,8 @@ mod tests {
         assert_eq!(member.highest_index_yes_vote, 0);
     }
 
-    // Two proposals
-    // 3 users
-    // multiple votes yes and not
     #[test]
     fn submit_vote_complex() {
-        // Setup the test contract
         let context = get_context(false);
         testing_env!(context);
         let proposal_one = MockProposal::new().build();
@@ -1912,10 +1859,6 @@ mod tests {
         );
     }
 
-    // Test cases process proposal
-    // Assert proposal has processed set to true
-    // Assert total_shares_requested has the proposal shares subtracted
-    // Test failed proposal too many nos
     #[test]
     fn process_proposal_failed() {
         let context = get_context(false);

@@ -10,8 +10,6 @@ pub struct ProposalEscrow {
     user_balances: UnorderedMap<AccountId, u128>,
 }
 
-// This can only be called internally
-// on the token Receiver
 impl ProposalEscrow {
     pub fn new() -> Self {
         Self {
@@ -78,6 +76,7 @@ mod tests {
         let balance = proposal_escrow.user_balances.get(&bob()).unwrap();
         assert_eq!(balance, 100, "Saved balance does not equal 100")
     }
+
     // deposit with previous balance
     #[test]
     fn deposit_with_previous_balance() {

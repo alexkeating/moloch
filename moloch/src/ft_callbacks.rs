@@ -15,16 +15,10 @@ impl FungibleTokenReceiver for Moloch {
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
-        // let initial_storage_usage = env::storage_usage();
-
+        // TODO: Do we need a storage check here
         let token_id = env::predecessor_account_id();
         if token_id == self.token_id {
             self.escrow.deposit(sender_id.into(), u128::from(amount));
-            // self.update_available_storage(
-            //     env::predecessor_account_id(),
-            //     initial_storage_usage,
-            //     env::storage_usage(),
-            // );
             return PromiseOrValue::Value(U128(0));
         };
         PromiseOrValue::Value(amount)
