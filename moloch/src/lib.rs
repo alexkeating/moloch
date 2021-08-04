@@ -868,6 +868,25 @@ impl Moloch {
         );
     }
 
+    #[payable]
+    pub fn escrow_withdraw(&mut self, account_id: AccountId, amount: U128) -> Promise {
+        assert_eq!(
+            account_id,
+            env::predecessor_account_id(),
+            "Predecessor account id does not equal withdrawl account id"
+        );
+        self.escrow.withdraw(account_id, amount.into());
+        let prepaid_gas = env::prepaid_gas();
+        ext_fungible_token::ft_transfer(
+            env::predecessor_account_id(),
+            amount,
+            Some("Withdrawing fungible tokens from Moloch escrow".to_string()),
+            &self.token_id,
+            1,
+            prepaid_gas / 2,
+        )
+    }
+
     // Getter functions
 
     /// The difference between the block_timestamp and the summoning_time is used to figure out how
@@ -1694,7 +1713,10 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
+            .add_escrow_deposit(bob(), 400)
+            .add_escrow_deposit(robert(), 100)
             .register_user(bob(), storage_deposit(), storage_deposit())
+            .register_user(alice(), storage_deposit(), storage_deposit())
             .build();
         let proposal = contract.proposal_queue.get(0).unwrap();
         assert_eq!(proposal.processed, false, "Proposal has been processed");
@@ -1709,6 +1731,7 @@ mod tests {
                     + (contract.period_duration
                         * (contract.voting_period_length + contract.grace_period_length + 1)),
             )
+            .predecessor_account_id(alice().try_into().unwrap())
             .build();
         testing_env!(context);
         contract.process_proposal(0.into());
@@ -1728,6 +1751,10 @@ mod tests {
             contract.total_shares, 21,
             "Total shares has not been updated correctly"
         );
+        let bob_balance = contract.get_escrow_user_balance(bob());
+        assert_eq!(u128::from(bob_balance), 490, "Bob's balance is incorrect");
+        let bank_balance = contract.get_bank_balance();
+        assert_eq!(u128::from(bank_balance), 12, "Bank balance is incorrect");
     }
 
     // Test passed proposal existing member, Assert shares are added
@@ -1898,6 +1925,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
+            .add_escrow_deposit(bob(), 400)
             .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let proposal = contract.proposal_queue.get(0).unwrap();
@@ -1929,6 +1957,16 @@ mod tests {
             "Member does not have the correct number not shares"
         );
         assert_eq!(contract.total_shares, 11, "Total shares is not correct");
+        let bob_balance = contract.get_escrow_user_balance(bob());
+        assert_eq!(u128::from(bob_balance), 490, "Bob's balance is incorrect");
+        let robert_balance = contract.get_escrow_user_balance(robert());
+        assert_eq!(
+            u128::from(robert_balance),
+            12,
+            "Robert's balance is incorrect"
+        );
+        let bank_balance = contract.get_bank_balance();
+        assert_eq!(u128::from(bank_balance), 0, "Bank balance is incorrect");
     }
 
     // Test failed proposal aborted
@@ -1941,6 +1979,7 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_proposal(proposal)
             .add_member(member)
+            .add_escrow_deposit(bob(), 400)
             .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         let proposal = contract.proposal_queue.get(0).unwrap();
@@ -1972,6 +2011,17 @@ mod tests {
             "Member does not have the correct number not shares"
         );
         assert_eq!(contract.total_shares, 11, "Total shares is not correct");
+
+        let bob_balance = contract.get_escrow_user_balance(bob());
+        assert_eq!(u128::from(bob_balance), 490, "Bob's balance is incorrect");
+        let robert_balance = contract.get_escrow_user_balance(robert());
+        assert_eq!(
+            u128::from(robert_balance),
+            12,
+            "Robert's balance is incorrect"
+        );
+        let bank_balance = contract.get_bank_balance();
+        assert_eq!(u128::from(bank_balance), 0, "Bank balance is incorrect");
     }
 
     // Proposall does not exist
@@ -2299,6 +2349,34 @@ mod tests {
             .predecessor_account_id(robert().try_into().unwrap())
             .build());
         contract.update_delegate_key("soda".to_string());
+    }
+    #[test]
+    fn escrow_withdraw() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().build();
+        let mut contract = MockMoloch::new()
+            .add_member(member)
+            .add_escrow_deposit(bob(), 10)
+            .register_user(bob(), storage_deposit(), storage_deposit())
+            .build();
+        contract.escrow_withdraw(bob(), 5.into());
+        let bob_balance = contract.get_escrow_user_balance(bob());
+        assert_eq!(u128::from(bob_balance), 5, "Bob's balance is incorrect");
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Predecessor account id does not equal withdrawl account id"#)]
+    fn escrow_withdraw_different_account() {
+        let context = get_context(false);
+        testing_env!(context);
+        let member = MockMember::new().build();
+        let mut contract = MockMoloch::new()
+            .add_member(member)
+            .add_escrow_deposit(robert(), 10)
+            .register_user(bob(), storage_deposit(), storage_deposit())
+            .build();
+        contract.escrow_withdraw(robert(), 5.into());
     }
 
     // Getter

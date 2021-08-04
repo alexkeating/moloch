@@ -325,8 +325,25 @@ describe("Moloch test", () => {
     expect(bankBalance).toEqual("6");
   });
 
-  // abort
-  // failed vote
+  // withdraw
+	test("Escrow withdraw", async () => {
+    const start = await getEscrowBalance(masterAccount, aliceId, contractAccountId);
+		console.log(start)
+    await alice.functionCall({
+      contractId: contractAccountId,
+      methodName: "escrow_withdraw",
+      args: {
+        account_id: aliceId,
+        amount: "20",
+      },
+      attachedDeposit: "1",
+      gas: 300000000000000
+    });
+
+    const end = await getEscrowBalance(masterAccount, aliceId, contractAccountId);
+    expect(start - end).toEqual(20);
+	})
+
 });
 
 // Make sure process proposal and abort assert escrow values
