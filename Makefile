@@ -17,7 +17,7 @@ deploy_contract:
 unit:
 	cd contracts && cargo test --all
 
+# Make sure to clean up users after each test run
 end_to_end:
 	$(MAKE) deploy
 	yarn run test
-	$(MAKE) clean

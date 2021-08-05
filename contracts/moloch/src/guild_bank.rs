@@ -59,8 +59,8 @@ impl GuildBank {
 mod tests {
     use super::*;
     use crate::mocks::{fdai, get_context, robert};
+    use near_sdk::testing_env;
     use near_sdk::MockedBlockchain;
-    use near_sdk::{testing_env, VMContext};
 
     // Withdraw normal
     // Withdraw divide by 0

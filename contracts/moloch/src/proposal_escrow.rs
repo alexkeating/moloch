@@ -116,6 +116,6 @@ mod tests {
 
         let mut proposal_escrow = ProposalEscrow::new();
         proposal_escrow.user_balances.insert(&bob(), &20);
-        let balance = proposal_escrow.withdraw(bob(), 21);
+        proposal_escrow.withdraw(bob(), 21);
     }
 }
