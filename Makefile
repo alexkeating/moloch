@@ -1,15 +1,23 @@
 MOLOCH_ACCOUNT_ID=$(shell grep MOLOCH_ACCOUNT_ID .env | cut -d "=" -f2)
 
 build:
-	./build.sh
+	./scripts/build.sh
 
 deploy:
 	$(MAKE) build
-	./deploy.sh
+	./scripts/deploy.sh
 
 clean:
-	./clean.sh
+	./scripts/clean.sh
 
 deploy_contract:
 	$(MAKE) build
 	near deploy --wasmFile res/moloch.wasm --accountId $(MOLOCH_ACCOUNT_ID).mrkeating.testnet
+
+unit:
+	cd contracts && cargo test --all
+
+end_to_end:
+	$(MAKE) deploy
+	yarn run test
+	$(MAKE) clean

@@ -29,9 +29,7 @@ impl FungibleTokenReceiver for Moloch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use near_sdk::test_utils::{
-        get_created_receipts, get_logs, testing_env_with_promise_results, VMContextBuilder,
-    };
+    use near_sdk::test_utils::{testing_env_with_promise_results, VMContextBuilder};
     use near_sdk::{testing_env, Balance, MockedBlockchain, PromiseResult, VMContext};
     use std::convert::TryInto;
 
