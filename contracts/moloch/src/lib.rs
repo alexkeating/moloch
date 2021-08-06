@@ -18,9 +18,10 @@ mod guild_bank;
 mod proposal_escrow;
 mod storage_impl;
 
-const MAX_VOTING_PERIOD_LENGTH: u64 = 10000000000000000000; // maximum length of voting period;
-const MAX_GRACE_PERIOD_LENGTH: u64 = 10000000000000000000; // maximum length of grace period
-const MAX_DILUTION_BOUND: u128 = 10000000000000000000; // maximum dilution bound
+const MAX_VOTING_PERIOD_LENGTH: u64 = 10_000_000_000_000_000_000; // maximum length of voting period;
+const MAX_GRACE_PERIOD_LENGTH: u64 = 10_000_000_000_000_000_000; // maximum length of grace period
+const MAX_DILUTION_BOUND: u128 = 10_000_000_000_000_000_000; // maximum dilution bound
+const MAX_NUMBER_OF_SHARES: u128 = 10_000_000_000_000_000_000; // maximum dilution bound
 
 setup_alloc!();
 
@@ -257,7 +258,6 @@ impl Moloch {
         self.escrow.withdraw(tmp_account_id.to_string(), 1u128);
     }
 
-    // TODO this shouldn't be callbabel
     #[private]
     fn update_available_storage(
         &mut self,
@@ -334,6 +334,10 @@ impl Moloch {
         assert!(
             !shares_overflow,
             "Too many shares were requested: due to outstanding shares requested"
+        );
+        assert!(
+            _shares_requested <= MAX_NUMBER_OF_SHARES,
+            "Too many shares were requested: greater than max shares"
         );
 
         // 2. Add shares
@@ -585,7 +589,6 @@ impl Moloch {
             };
             if member_exists {
                 let mut member = self.members.get(&proposal.applicant).unwrap();
-                // TODO does this need to be saved back in?
                 member.shares = member.shares.saturating_add(proposal.shares_requested);
                 self.members.insert(&proposal.applicant, &member);
             } else {
@@ -721,7 +724,14 @@ impl Moloch {
         )
     }
 
-    /// TODO: Add documentation
+    /// This function exists to mitigate situations
+    /// where a memeber makes a proposal for an applicant
+    /// and gives the applicant fewer shares than they are
+    /// expecting.
+    ///
+    /// In these situations the applicant can cancel the proposal
+    /// and immediately receive their money back. Aborting will not
+    /// immediately return the proposers deposit aas punishment.
     pub fn abort(&mut self, proposal_index: U64) {
         let initial_storage_usage = env::storage_usage();
         let _proposal_index = u64::from(proposal_index);
@@ -1237,6 +1247,11 @@ pub mod mocks {
             self
         }
 
+        pub fn total_shares_requested(&mut self, shares: u128) -> &mut Self {
+            self.total_shares_requested = shares;
+            self
+        }
+
         pub fn build(&self) -> Moloch {
             let mut moloch = Moloch::new(
                 self.summoner.to_string(),
@@ -1381,6 +1396,19 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_escrow_deposit(bob(), 100)
             .add_escrow_deposit(robert(), 10)
+            .total_shares_requested(u128::MAX.saturating_sub(1).into())
+            .register_user(bob(), storage_deposit(), storage_deposit())
+            .build();
+        contract.submit_proposal(robert(), 10.into(), 1.into(), "".to_string());
+    }
+    #[test]
+    #[should_panic(expected = r#"Too many shares were requested: greater than max shares"#)]
+    fn submit_proposal_too_many_shares_submitted() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new()
+            .add_escrow_deposit(bob(), 100)
+            .add_escrow_deposit(robert(), 10)
             .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         contract.submit_proposal(
@@ -1389,7 +1417,6 @@ mod tests {
             u128::MAX.saturating_sub(1).into(),
             "".to_string(),
         );
-        contract.submit_proposal(robert(), 10.into(), 1.into(), "".to_string());
     }
 
     #[test]
