@@ -5,7 +5,7 @@ use crate::utils::{init_moloch, register_user_moloch};
 
 #[test]
 fn simulate_submit_proposal() {
-    let (root, moloch, fdai, alice, bob, deposit_amount) = init_moloch();
+    let (_root, moloch, fdai, alice, bob, deposit_amount) = init_moloch();
     register_user_moloch(&alice, &moloch);
     register_user_moloch(&bob, &moloch);
     call!(

@@ -29,10 +29,8 @@ impl FungibleTokenReceiver for Moloch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use near_sdk::test_utils::{
-        get_created_receipts, get_logs, testing_env_with_promise_results, VMContextBuilder,
-    };
-    use near_sdk::{testing_env, Balance, MockedBlockchain, PromiseResult, VMContext};
+    use near_sdk::test_utils::VMContextBuilder;
+    use near_sdk::{testing_env, MockedBlockchain};
     use std::convert::TryInto;
 
     #[test]
@@ -61,7 +59,7 @@ mod tests {
         );
         let returned_amount = match promise {
             PromiseOrValue::Promise(_) => 0,
-            PromiseOrValue::Value(T) => T.into(),
+            PromiseOrValue::Value(t) => t.into(),
         };
 
         assert_eq!(returned_amount, 10, "Returned amount is incorrect");

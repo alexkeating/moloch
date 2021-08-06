@@ -192,11 +192,7 @@ impl StorageManagement for Moloch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mocks::{
-        alice, bob, get_context, get_context_builder, robert, storage_deposit, MockMember,
-        MockMoloch, MockProposal,
-    };
-    use near_sdk::test_utils::{get_logs, VMContextBuilder};
+    use crate::mocks::{bob, get_context, get_context_builder, MockMoloch};
     use near_sdk::{testing_env, MockedBlockchain};
     use std::convert::TryInto;
 
@@ -218,7 +214,7 @@ mod tests {
         testing_env!(context_builder
             .attached_deposit(60000000000000000000)
             .build());
-        contract.storage_deposit((None), Some(false));
+        contract.storage_deposit(None, Some(false));
         let storage_balance = contract.user_storage_accounts.get(&bob()).unwrap();
         assert_eq!(
             storage_balance.total, 60000000000000000000,
@@ -307,7 +303,7 @@ mod tests {
         testing_env!(context_builder.build());
         let mut contract = MockMoloch::new().build();
         testing_env!(context_builder.attached_deposit(5).build());
-        let storage_balance = contract.storage_deposit(Some(bob().try_into().unwrap()), Some(true));
+        contract.storage_deposit(Some(bob().try_into().unwrap()), Some(true));
     }
 
     //  registration more than the amount

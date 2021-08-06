@@ -1,8 +1,6 @@
 use crate::utils::init_moloch;
-use near_contract_standards::storage_management::StorageBalanceBounds;
-use near_sdk::env;
 
-use near_sdk_sim::{call, to_yocto, view};
+use near_sdk_sim::{call, to_yocto};
 use std::convert::TryInto;
 // Verify the transfers are correct
 //
@@ -11,11 +9,11 @@ use std::convert::TryInto;
 // already registered full refund
 #[test]
 fn simulate_storage_deposit_exact() {
-    let (_, moloch, fdai, alice, bob, deposit_amount) = init_moloch();
+    let (_, moloch, _fdai, _alice, bob, _deposit_amount) = init_moloch();
     let start_amount = bob.account().unwrap().amount;
     let min_deposit = to_yocto("7");
     println!("Here {:?} 23", start_amount);
-    let res = call!(
+    call!(
         bob,
         moloch.storage_deposit(
             Some(bob.account_id.to_string().try_into().unwrap()),
@@ -33,11 +31,11 @@ fn simulate_storage_deposit_exact() {
 
 #[test]
 fn simulate_storage_deposit_transfer_back() {
-    let (_, moloch, fdai, alice, bob, deposit_amount) = init_moloch();
+    let (_, moloch, _fdai, _alice, bob, _deposit_amount) = init_moloch();
     let start_amount = &bob.account().unwrap().amount;
     let deposit = 828593677552200000000;
     println!("Here {:?} 23", start_amount);
-    let res = call!(
+    call!(
         bob,
         moloch.storage_deposit(
             Some(bob.account_id.to_string().try_into().unwrap()),
@@ -112,7 +110,7 @@ fn simulate_storage_withdraw_and_unregister() {
     let (_, moloch, _, alice, _, _) = init_moloch();
     let deposit = to_yocto("10");
     let start_amount = &alice.account().unwrap().amount;
-    let res = call!(
+    call!(
         alice,
         moloch.storage_deposit(
             Some(alice.account_id.to_string().try_into().unwrap()),

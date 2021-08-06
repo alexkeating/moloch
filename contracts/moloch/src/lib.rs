@@ -6,9 +6,7 @@ use near_contract_standards::fungible_token::core_impl::ext_fungible_token;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::{LookupMap, UnorderedMap, Vector};
 use near_sdk::json_types::{U128, U64};
-use near_sdk::{
-    env, ext_contract, near_bindgen, setup_alloc, AccountId, Balance, PanicOnDefault, Promise,
-};
+use near_sdk::{env, near_bindgen, setup_alloc, AccountId, Balance, PanicOnDefault, Promise};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,9 +18,10 @@ mod guild_bank;
 mod proposal_escrow;
 mod storage_impl;
 
-const MAX_VOTING_PERIOD_LENGTH: u64 = 10000000000000000000; // maximum length of voting period;
-const MAX_GRACE_PERIOD_LENGTH: u64 = 10000000000000000000; // maximum length of grace period
-const MAX_DILUTION_BOUND: u128 = 10000000000000000000; // maximum dilution bound
+const MAX_VOTING_PERIOD_LENGTH: u64 = 10_000_000_000_000_000_000; // maximum length of voting period;
+const MAX_GRACE_PERIOD_LENGTH: u64 = 10_000_000_000_000_000_000; // maximum length of grace period
+const MAX_DILUTION_BOUND: u128 = 10_000_000_000_000_000_000; // maximum dilution bound
+const MAX_NUMBER_OF_SHARES: u128 = 10_000_000_000_000_000_000; // maximum dilution bound
 
 setup_alloc!();
 
@@ -259,7 +258,6 @@ impl Moloch {
         self.escrow.withdraw(tmp_account_id.to_string(), 1u128);
     }
 
-    // TODO this shouldn't be callbabel
     #[private]
     fn update_available_storage(
         &mut self,
@@ -336,6 +334,10 @@ impl Moloch {
         assert!(
             !shares_overflow,
             "Too many shares were requested: due to outstanding shares requested"
+        );
+        assert!(
+            _shares_requested <= MAX_NUMBER_OF_SHARES,
+            "Too many shares were requested: greater than max shares"
         );
 
         // 2. Add shares
@@ -587,7 +589,6 @@ impl Moloch {
             };
             if member_exists {
                 let mut member = self.members.get(&proposal.applicant).unwrap();
-                // TODO does this need to be saved back in?
                 member.shares = member.shares.saturating_add(proposal.shares_requested);
                 self.members.insert(&proposal.applicant, &member);
             } else {
@@ -723,7 +724,14 @@ impl Moloch {
         )
     }
 
-    /// TODO: Add documentation
+    /// This function exists to mitigate situations
+    /// where a memeber makes a proposal for an applicant
+    /// and gives the applicant fewer shares than they are
+    /// expecting.
+    ///
+    /// In these situations the applicant can cancel the proposal
+    /// and immediately receive their money back. Aborting will not
+    /// immediately return the proposers deposit aas punishment.
     pub fn abort(&mut self, proposal_index: U64) {
         let initial_storage_usage = env::storage_usage();
         let _proposal_index = u64::from(proposal_index);
@@ -943,10 +951,8 @@ impl Moloch {
 #[cfg(test)]
 pub mod mocks {
     use super::*;
-    use near_sdk::test_utils::{
-        get_created_receipts, get_logs, testing_env_with_promise_results, VMContextBuilder,
-    };
-    use near_sdk::{testing_env, Balance, MockedBlockchain, PromiseResult, VMContext};
+    use near_sdk::test_utils::VMContextBuilder;
+    use near_sdk::VMContext;
     use std::convert::TryInto;
 
     pub fn get_context(is_view: bool) -> VMContext {
@@ -1241,6 +1247,11 @@ pub mod mocks {
             self
         }
 
+        pub fn total_shares_requested(&mut self, shares: u128) -> &mut Self {
+            self.total_shares_requested = shares;
+            self
+        }
+
         pub fn build(&self) -> Moloch {
             let mut moloch = Moloch::new(
                 self.summoner.to_string(),
@@ -1280,7 +1291,6 @@ mod tests {
         alice, bob, get_context, get_context_builder, robert, storage_deposit, MockMember,
         MockMoloch, MockProposal,
     };
-    use near_sdk::test_utils::{get_logs, VMContextBuilder};
     use near_sdk::{testing_env, MockedBlockchain};
     use std::convert::TryInto;
 
@@ -1294,7 +1304,7 @@ mod tests {
             .add_escrow_deposit(bob(), 101)
             .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
-        let promise = contract.submit_proposal(robert(), 12.into(), 10.into(), "".to_string());
+        contract.submit_proposal(robert(), 12.into(), 10.into(), "".to_string());
 
         let mut context_builder = get_context_builder(false);
         testing_env!(context_builder
@@ -1318,7 +1328,6 @@ mod tests {
             max_total_shares_at_yes_vote: 0,
             votes_by_member: HashMap::new(),
         };
-        let logs = get_logs();
 
         assert_eq!(proposal.unwrap(), expected_proposal);
         assert_eq!(contract.total_shares_requested, 10);
@@ -1387,6 +1396,19 @@ mod tests {
         let mut contract = MockMoloch::new()
             .add_escrow_deposit(bob(), 100)
             .add_escrow_deposit(robert(), 10)
+            .total_shares_requested(u128::MAX.saturating_sub(1).into())
+            .register_user(bob(), storage_deposit(), storage_deposit())
+            .build();
+        contract.submit_proposal(robert(), 10.into(), 1.into(), "".to_string());
+    }
+    #[test]
+    #[should_panic(expected = r#"Too many shares were requested: greater than max shares"#)]
+    fn submit_proposal_too_many_shares_submitted() {
+        let context = get_context(false);
+        testing_env!(context);
+        let mut contract = MockMoloch::new()
+            .add_escrow_deposit(bob(), 100)
+            .add_escrow_deposit(robert(), 10)
             .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
         contract.submit_proposal(
@@ -1395,7 +1417,6 @@ mod tests {
             u128::MAX.saturating_sub(1).into(),
             "".to_string(),
         );
-        contract.submit_proposal(robert(), 10.into(), 1.into(), "".to_string());
     }
 
     #[test]
@@ -2260,7 +2281,6 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let mut contract = MockMoloch::new().build();
-        let mut context_builder = get_context_builder(false);
         contract.update_delegate_key("".to_string());
     }
 
@@ -2271,7 +2291,6 @@ mod tests {
         testing_env!(context);
         let member = MockMember::new().build();
         let mut contract = MockMoloch::new().add_member(member).build();
-        let mut context_builder = get_context_builder(false);
         contract.update_delegate_key(robert().to_string());
     }
 
@@ -2285,7 +2304,6 @@ mod tests {
             .add_member(member)
             .register_user(bob(), storage_deposit(), storage_deposit())
             .build();
-        let mut context_builder = get_context_builder(false);
         contract.update_delegate_key("soda".to_string());
         let mut context_builder = get_context_builder(false);
         testing_env!(context_builder
@@ -2373,7 +2391,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let proposal = MockProposal::new().processed(true).build();
-        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let contract = MockMoloch::new().add_proposal(proposal).build();
         let can = contract.can_rage_quit(0.into());
         assert_eq!(can, true)
     }
@@ -2383,7 +2401,7 @@ mod tests {
         let context = get_context(false);
         testing_env!(context);
         let proposal = MockProposal::new().processed(false).build();
-        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let contract = MockMoloch::new().add_proposal(proposal).build();
         let can = contract.can_rage_quit(0.into());
         assert_eq!(can, false)
     }
@@ -2393,8 +2411,8 @@ mod tests {
     fn can_rage_quit_proposal_does_not_exist() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = MockMoloch::new().build();
-        let can = contract.can_rage_quit(0.into());
+        let contract = MockMoloch::new().build();
+        contract.can_rage_quit(0.into());
     }
 
     #[test]
@@ -2427,7 +2445,7 @@ mod tests {
         testing_env!(context);
         let member = MockMember::new().delegate_key(bob()).build();
         let proposal = MockProposal::new().yes_vote(&member).build();
-        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let contract = MockMoloch::new().add_proposal(proposal).build();
         let vote = contract.get_member_proposal_vote(bob(), 0.into());
         assert_eq!(vote, Vote::Yes, "Bob did not vote yes")
     }
@@ -2438,7 +2456,7 @@ mod tests {
         testing_env!(context);
         let member = MockMember::new().build();
         let proposal = MockProposal::new().yes_vote(&member).build();
-        let mut contract = MockMoloch::new().add_proposal(proposal).build();
+        let contract = MockMoloch::new().add_proposal(proposal).build();
         let vote = contract.get_member_proposal_vote(bob(), 0.into());
         assert_eq!(vote, Vote::Null, "Bob has not voted yes yet")
     }
@@ -2451,8 +2469,8 @@ mod tests {
         testing_env!(context);
         let member = MockMember::new().build();
         let proposal = MockProposal::new().yes_vote(&member).build();
-        let mut contract = MockMoloch::new().add_proposal(proposal).build();
-        let vote = contract.get_member_proposal_vote(robert(), 0.into());
+        let contract = MockMoloch::new().add_proposal(proposal).build();
+        contract.get_member_proposal_vote(robert(), 0.into());
     }
 
     // Proposal does not exist
@@ -2461,8 +2479,8 @@ mod tests {
     fn get_member_proposal_vote_proposal_does_not_exist() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = MockMoloch::new().build();
-        let vote = contract.get_member_proposal_vote(bob(), 0.into());
+        let contract = MockMoloch::new().build();
+        contract.get_member_proposal_vote(bob(), 0.into());
     }
     #[test]
     fn get_user_escrow_balance() {
@@ -2488,7 +2506,7 @@ mod tests {
     fn only_delegate() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = MockMoloch::new().build();
+        let contract = MockMoloch::new().build();
         contract.only_delegate()
     }
 
@@ -2497,7 +2515,7 @@ mod tests {
     fn only_delegate_not() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = MockMoloch::new().build();
+        let contract = MockMoloch::new().build();
 
         let mut context = get_context_builder(false);
         testing_env!(context
@@ -2510,7 +2528,7 @@ mod tests {
     fn only_member() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = MockMoloch::new().build();
+        let contract = MockMoloch::new().build();
         contract.only_member()
     }
 
@@ -2519,7 +2537,7 @@ mod tests {
     fn only_member_not() {
         let context = get_context(false);
         testing_env!(context);
-        let mut contract = MockMoloch::new().build();
+        let contract = MockMoloch::new().build();
 
         let mut context_builder = get_context_builder(false);
         testing_env!(context_builder
